@@ -34,7 +34,7 @@ namespace SWE.Models
         }
 
         // Retrieves a card by its ID
-        public Card GetCardById(string cardId)
+        public Card GetCardById(Guid cardId)
         {
             var card = _cards.FirstOrDefault(c => c.id == cardId);
             if (card == null)
@@ -59,7 +59,7 @@ namespace SWE.Models
         }
 
         // Deletes a card by ID
-        public void DeleteCard(string cardId)
+        public void DeleteCard(Guid cardId)
         {
             var card = _cards.FirstOrDefault(c => c.id == cardId);
             if (card == null)

@@ -12,6 +12,11 @@ using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Concurrent;
 using System.Net.Http;
 using Newtonsoft.Json;
+using Npgsql;
+using static System.Formats.Asn1.AsnWriter;
+using System.Net.WebSockets;
+using System.Web;
+
 
 namespace SWE.Models
 {
@@ -63,39 +68,15 @@ namespace SWE.Models
                 _ => "Unknown"
             };
         }
-
-
-        public async Task HandleRequest(string method, string path, string body, Dictionary<string, string> headers, StreamWriter writer)
-        {
-            // Find a matching route based on the HTTP method and path
-            var route = routes.FirstOrDefault(r => r.Method.Equals(method, StringComparison.OrdinalIgnoreCase) && r.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
-
-            if (route == null)
-            {
-                // If no route matches, send a 404 Not Found response
-                await SendResponse(writer, 404, "Not Found");
-                return;
-            }
-
-            try
-            {
-                // Call the handler for the route with the provided body and writer
-                await route.Handler(body, writer);
-            }
-            catch (Exception ex)
-            {
-                // If there is an error processing the request, send a 500 Internal Server Error response
-                Console.WriteLine($"Error handling request: {ex.Message}");
-                await SendResponse(writer, 500, "Internal Server Error");
-            }
-        }
-
     }
+
     //tcp server mit users, sessions und router
     public class TcpServer
     {
         private readonly IServiceProvider _serviceProvider;
         private readonly Router _router;
+        private readonly UserService _userService;
+        private readonly Package _packageService;
 
         private List<Package> packs;
 
@@ -108,7 +89,6 @@ namespace SWE.Models
             var userService = _serviceProvider.GetRequiredService<UserService>();
             var packageService = _serviceProvider.GetRequiredService<Package>();
             packs = new List<Package>();
-            InitRoutes(userService, packageService);
         }
 
         public void Start(string host, int port)
@@ -125,88 +105,6 @@ namespace SWE.Models
                 Task.Run(() => HandleClient(client));
             }
         }
-
-        private void InitRoutes(UserService _userService, Package _packageService)
-        {
-            _router.RegisterRoute("POST", "/sessions", async (body, writer) =>
-            {
-                var headers = new Dictionary<string, string>();
-                await HandleLogin(body, headers, writer);
-            });
-
-            _router.RegisterRoute("POST", "/users", async (body, writer) =>
-            {
-                var headers = new Dictionary<string, string>();
-                await HandleRegisterUser(body, headers, writer);
-            });
-
-            _router.RegisterRoute("POST", "/packages", async (body, writer) =>
-            {
-                // Parse the headers from the request (you need to implement this step)
-                var headers = ParseHeadersFromRequest(writer);
-
-                // Now check for the Authorization header
-                string authorizationHeader = headers.ContainsKey("Authorization") ? headers["Authorization"] : string.Empty;
-
-                Console.WriteLine($"Received Auth Header: {authorizationHeader}");
-
-                if (string.IsNullOrEmpty(authorizationHeader) || !authorizationHeader.StartsWith("Bearer "))
-                {
-                    Console.WriteLine("Authorization header is missing or invalid.");
-                    SendResponsePackage((NetworkStream)writer.BaseStream, 401, "Unauthorized");
-                    return;
-                }
-
-
-                // Deserialize the body into the correct type (List<Dictionary<string, object>>)
-                var packagesData = JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(body);
-
-                // Pass the deserialized 'packagesData' and 'authorizationHeader' to HandlePackages
-                var result = await HandlePackages(packagesData, authorizationHeader, (NetworkStream)writer.BaseStream);
-            });
-        }
-
-        private Dictionary<string, string> ParseHeadersFromRequest(StreamWriter writer)
-        {
-            var headers = new Dictionary<string, string>();
-
-            // Assuming you're working with the incoming request stream (via writer's BaseStream)
-            if (writer.BaseStream is NetworkStream networkStream)
-            {
-                using (StreamReader reader = new StreamReader(networkStream))
-                {
-                    string line;
-                    while ((line = reader.ReadLine()) != null && line != "")
-                    {
-                        int separatorIndex = line.IndexOf(":");
-                        if (separatorIndex > 0)
-                        {
-                            string key = line.Substring(0, separatorIndex).Trim();
-                            string value = line.Substring(separatorIndex + 1).Trim();
-                            headers[key] = value;
-                        }
-                    }
-                }
-            }
-
-            return headers;
-        }
-
-
-
-        private NetworkStream GetNetworkStreamFromWriter(StreamWriter writer)
-        {
-            // This assumes the StreamWriter is wrapped around a NetworkStream.
-            if (writer.BaseStream is NetworkStream networkStream)
-            {
-                return networkStream;
-            }
-
-            throw new InvalidOperationException("The StreamWriter is not associated with a NetworkStream.");
-        }
-
-
-
         private async Task HandleClient(TcpClient client)
         {
             try
@@ -216,17 +114,76 @@ namespace SWE.Models
                 using (StreamWriter writer = new StreamWriter(stream) { AutoFlush = true })
                 {
                     string requestLine = await reader.ReadLineAsync();
-                    if (string.IsNullOrEmpty(requestLine)) return;
-
                     string[] requestParts = requestLine.Split(' ');
+
                     if (requestParts.Length < 3) return;
 
-                    string method = requestParts[0];
-                    string path = requestParts[1];
-                    Dictionary<string, string> headers = await ParseHeaders(reader);
-                    string body = await ReadRequestBody(reader, headers);
+                    int contentLength = 0;
+                    string authHeader = null;
+                    string line;
+                    bool headersEnd = false; // Flag to detect end of headers
 
-                    await _router.HandleRequest(method, path, body, headers, writer);
+                    while (!headersEnd && !string.IsNullOrEmpty(line = await reader.ReadLineAsync()))
+                    {
+                        if (line.StartsWith("Content-Length:"))
+                        {
+                            contentLength = int.Parse(line.Split(':')[1].Trim());
+                        }
+                        else if (line.StartsWith("Authorization:"))
+                        {
+                            authHeader = line.Split(':')[1].Trim();
+                        }
+                        else if (line == "") // Detect end of headers when an empty line is encountered
+                        {
+                            headersEnd = true;
+                        }
+                    }
+
+                    // Log content length for debugging
+                    Console.WriteLine($"Content-Length: {contentLength}");
+                    Console.WriteLine($"Authorization: {authHeader}");
+
+                    Console.WriteLine($"Request Method: {requestParts[0]}");
+                    Console.WriteLine($"Request Path: {requestParts[1]}");
+
+                    string method = requestParts[0];
+                    string path = requestParts[1].Trim();
+
+                    // Handle body
+                    char[] buffer = new char[contentLength];
+                    if (contentLength > 0)
+                    {
+                        await reader.ReadAsync(buffer, 0, contentLength);
+                    }
+                    string body = new string(buffer);
+
+                    Console.WriteLine($"Request Body: {body}");
+
+                    // Check if the path is correctly matched to "/users" or "/sessions"
+                    if (path == "/sessions" && method == "POST")
+                    {
+                        await HandleLogin(body, new Dictionary<string, string>(), writer);
+                    }
+                    else if (path == "/users" && method == "POST")
+                    {
+                        await HandleRegisterUser(body, new Dictionary<string, string>(), writer);
+                    }
+                    else if (path == "/packages" && method == "POST")
+                    {
+                        List<Dictionary<string, object>> parsedBody = JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(body);
+                        await HandlePackages(parsedBody, authHeader, stream);
+                    }
+
+
+                    else if (path.StartsWith("/transactions/packages") && method == "POST")
+                    {
+                        await HandleAcquirePackages(authHeader, stream);
+                    }
+
+                    else
+                    {
+                        await SendResponse(writer, 404, "Not Found");
+                    }
                 }
             }
             catch (Exception ex)
@@ -235,39 +192,61 @@ namespace SWE.Models
             }
         }
 
-        private async Task<Dictionary<string, string>> ParseHeaders(StreamReader reader)
+        public async Task<int> HandleAcquirePackages(string Auth, NetworkStream stream)
         {
-            var headers = new Dictionary<string, string>();
-            string line;
-            while (!string.IsNullOrEmpty(line = await reader.ReadLineAsync()))
+            Console.WriteLine("Debug 4\n");
+            using var scope = _serviceProvider.CreateScope();
+            var userService = scope.ServiceProvider.GetRequiredService<UserService>();
+            var packageService = scope.ServiceProvider.GetRequiredService<Package>();
+            var cardService = scope.ServiceProvider.GetRequiredService<Card>();
+            Console.WriteLine("Debug 3\n");
+
+            // Step 1: Authenticate the user
+            var token = Auth.Replace("Bearer ", "").Trim();
+            var user = await userService.GetUserByTokenAsync(token);  // Ensure this is awaited
+            Console.WriteLine("Debug 1\n");
+            if (user == null)
             {
-                int separatorIndex = line.IndexOf(":", StringComparison.Ordinal);
-                if (separatorIndex > 0)
-                {
-                    string key = line.Substring(0, separatorIndex).Trim();
-                    string value = line.Substring(separatorIndex + 1).Trim();
-                    headers[key] = value;
-                }
+                await SendResponsePackage(stream, 401, "Unauthorized");
+                return -1;
             }
-            return headers;
+
+            // Step 2: Check if the user has enough coins
+            if (user.coins < 5)
+            {
+                await SendResponsePackage(stream, 400, "Insufficient coins");
+                return -1;
+            }
+            Console.WriteLine("Debug 2\n");
+
+            // Step 3: Get the package ID (you can modify this logic as needed)
+            // You might choose to use a specific package or a random package.
+            var packageId = 1; // Example, replace with logic to get the packageId
+
+            // Step 4: Acquire the cards from the package
+            var package = await packageService.GetPackageCardsAsync(packageId); // Pass the packageId here
+            if (package == null || package.Count == 0)  // Use Count here after awaiting the task
+            {
+                await SendResponsePackage(stream, 400, "Package is empty");
+                return -1;
+            }
+
+            // Step 5: Deduct coins and add the cards to the user's inventory
+            await userService.DeductCoinsFromUserAsync(user, 5); // Deduct 5 coins for the purchase
+            await cardService.AddCardsToUserInventoryAsync(user, package); // Add the cards from the package to the user's inventory
+
+            // Step 6: Send success response
+            await SendResponsePackage(stream, 201, "Package acquired successfully");
+
+            return 0;
         }
 
-        private async Task<string> ReadRequestBody(StreamReader reader, Dictionary<string, string> headers)
-        {
-            if (headers.TryGetValue("Content-Length", out string contentLengthValue) &&
-                int.TryParse(contentLengthValue, out int contentLength))
-            {
-                char[] bodyChars = new char[contentLength];
-                await reader.ReadAsync(bodyChars, 0, contentLength);
-                return new string(bodyChars);
-            }
-            return string.Empty;
-        }
 
         public async Task<int> HandlePackages(List<Dictionary<string, object>> receive, string Auth, NetworkStream stream)
         {
-            var packagesINT = new Package().createPackage(Auth, receive);
+            var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
 
+            var packagesINT = new Package().createPackage(Auth, receive, connection);
             if (packagesINT.Item2 == 0)
             {
                 // packs.Add(packagesINT.Item1);
@@ -308,25 +287,33 @@ namespace SWE.Models
 
         private async Task HandleRegisterUser(string body, Dictionary<string, string> headers, StreamWriter writer)
         {
-            using var scope = _serviceProvider.CreateScope();
-            var userService = scope.ServiceProvider.GetRequiredService<UserService>();
-            var user = JsonConvert.DeserializeObject<User>(body);
-
-            if (user == null)
+            try
             {
-                await SendResponse(writer, 400, "Invalid request");
-                return;
+                using var scope = _serviceProvider.CreateScope();
+                var userService = scope.ServiceProvider.GetRequiredService<UserService>();
+                var user = JsonConvert.DeserializeObject<User>(body);
+
+                if (user == null)
+                {
+                    await SendResponse(writer, 400, "Invalid request");
+                    return;
+                }
+
+                var result = await userService.RegisterUserAsync(user);
+
+                if (result.IsSuccess)
+                {
+                    await SendResponse(writer, 201, "User created successfully");
+                }
+                else
+                {
+                    await SendResponse(writer, 409, "User already exists");
+                }
             }
-
-            var result = await userService.RegisterUserAsync(user);
-
-            if (result.IsSuccess)
+            catch (Exception ex)
             {
-                await SendResponse(writer, 201, "User created successfully");
-            }
-            else
-            {
-                await SendResponse(writer, 409, "User already exists");
+                Console.WriteLine($"Error in HandleRegisterUser: {ex.Message}");
+                await SendResponse(writer, 500, "Internal Server Error");
             }
         }
 
@@ -353,31 +340,16 @@ namespace SWE.Models
             await stream.WriteAsync(responseBytes, 0, responseBytes.Length);
         }
 
-
         private async Task SendResponse(StreamWriter writer, int statusCode, string message)
         {
-            // Write headers, status code, and message using StreamWriter
             await writer.WriteLineAsync($"HTTP/1.1 {statusCode} OK");
             await writer.WriteLineAsync($"Content-Type: application/json");
             await writer.WriteLineAsync($"Content-Length: {message.Length}");
             await writer.WriteLineAsync();
             await writer.WriteLineAsync(message);
-            await writer.FlushAsync();
+            await writer.FlushAsync();  // Ensure flush is done
+
         }
-
-
-        private string GetStatusDescription(int statusCode)
-        {
-            return statusCode switch
-            {
-                201 => "Created",
-                401 => "Unauthorized",
-                403 => "Forbidden",
-                500 => "Internal Server Error",
-                _ => "OK"
-            };
-        }
-
     }
 
     public class UserLoginRequest

@@ -143,11 +143,12 @@ namespace SWE.Models
                 {
                     while (await reader.ReadAsync())
                     {
-                        cards.Add(new Card
+                        cards.Add(new Card(connection)
                         {
-                            id = reader.GetString(reader.GetOrdinal("id")), // Get Id as a string
+                            id = reader.GetGuid(reader.GetOrdinal("id")), // Get Id as a string
                             name = reader.GetString(reader.GetOrdinal("name")),
                             damage = reader.GetDouble(reader.GetOrdinal("damage")), // Get Damage as a double
+                            
                         });
                     }
                 }
@@ -159,25 +160,7 @@ namespace SWE.Models
     }
 
     // Example of entities used
-    public class User
-    {
-        public int id { get; set; }
-        public string username { get; set; }
-        public string password { get; set; }
-        public string token { get; set; }
-        public string image { get; set; }
-        public int coins { get; set; }
-        public int wins { get; set; }
-        public int losses { get; set; }
-        public string bio { get; set; }
-        public bool isadmin { get; set; }
-    }
+    
 
-    public class Card
-    {
-        public string id { get; set; }
-        public string name { get; set; }
-        public double damage { get; set; }
-    }
     
 }

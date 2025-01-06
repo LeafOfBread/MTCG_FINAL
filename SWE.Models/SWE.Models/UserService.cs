@@ -43,34 +43,36 @@ public class UserService
     public async Task<User> GetUserByTokenAsync(string token)
     {
         const string query = "SELECT * FROM users WHERE token = @token";
-
-        using (var command = new NpgsqlCommand(query, _connection))
+        using (var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432"))
         {
-            command.Parameters.AddWithValue("@token", token);
-
-            // Open connection once at the start and reuse it for the query
-            if (_connection.State != System.Data.ConnectionState.Open)
+            await connection.OpenAsync();
+            using (var command = new NpgsqlCommand(query, connection))
             {
-                await _connection.OpenAsync();
-            }
-
-            using (var reader = await command.ExecuteReaderAsync())
-            {
-                if (await reader.ReadAsync())
+                command.Parameters.AddWithValue("@token", token);
+                Console.WriteLine("Executing query to fetch user by token...");
+                using (var reader = await command.ExecuteReaderAsync())
                 {
-                    return new User
+                    if (reader.Read())
                     {
-                        id = reader.GetInt32(reader.GetOrdinal("id")),
-                        username = reader.GetString(reader.GetOrdinal("username")),
-                        password = reader.GetString(reader.GetOrdinal("password")),
-                        token = reader.IsDBNull(reader.GetOrdinal("token")) ? null : reader.GetString(reader.GetOrdinal("token"))
-                    };
+                        Console.WriteLine("User found, returning user.");
+                        return new User
+                        {
+                            id = reader.GetInt32(reader.GetOrdinal("id")),
+                            coins = reader.GetInt32(reader.GetOrdinal("coins")),
+                            username = reader.GetString(reader.GetOrdinal("username")),
+                            password = reader.GetString(reader.GetOrdinal("password")),
+                            token = reader.GetString(reader.GetOrdinal("token")),
+                            wins = reader.GetInt32(reader.GetOrdinal("wins")),
+                            losses = reader.GetInt32(reader.GetOrdinal("losses")),
+                        };
+                    }
+                    Console.WriteLine("User not found.");
+                    return null;
                 }
             }
         }
-
-        return null;
     }
+
 
     public async Task<User> GetUserByUsernameAsync(string username)
     {
@@ -96,11 +98,9 @@ public class UserService
                         username = reader.GetString(reader.GetOrdinal("username")),
                         password = reader.GetString(reader.GetOrdinal("password")),
                         token = reader.GetString(reader.GetOrdinal("token")),
-                        image = reader.IsDBNull(reader.GetOrdinal("image")) ? null : reader.GetString(reader.GetOrdinal("image")),
                         coins = reader.GetInt32(reader.GetOrdinal("coins")),
                         wins = reader.GetInt32(reader.GetOrdinal("wins")),
                         losses = reader.GetInt32(reader.GetOrdinal("losses")),
-                        bio = reader.IsDBNull(reader.GetOrdinal("bio")) ? null : reader.GetString(reader.GetOrdinal("bio"))
                     };
                 }
             }
@@ -125,6 +125,17 @@ public class UserService
                 await _connection.OpenAsync();
             }
 
+            await command.ExecuteNonQueryAsync();
+        }
+    }
+
+    public async Task DeductCoinsFromUserAsync(User user, int amount)
+    {
+        const string query = "UPDATE users SET coins = coins - @amount WHERE id = @id";
+        using (var command = new NpgsqlCommand(query, _connection))
+        {
+            command.Parameters.AddWithValue("@amount", amount);
+            command.Parameters.AddWithValue("@id", user.id);
             await command.ExecuteNonQueryAsync();
         }
     }
@@ -185,13 +196,6 @@ public class UserService
 
         return new RegistrationResult { IsSuccess = true };
     }
-    public async Task<bool> IsAdminAsync(string token)
-    {
-        // Check if the token is valid and corresponds to the admin role
-        var user = await GetUserByTokenAsync(token);
-        return user != null && user.isadmin; // Assumes you have an `IsAdmin` field
-    }
-
     public bool VerifyPasswordHash(string enteredPassword, string storedHash)
     {
         return BCrypt.Net.BCrypt.Verify(enteredPassword, storedHash);

@@ -1,9 +1,11 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Newtonsoft.Json;
 using Npgsql;
 using SWE.Models;
 using System;
+using System.Net.Sockets;
 using System.Threading.Tasks;
 
 public class Program
@@ -28,19 +30,23 @@ public class Program
     }
 
     public static IHostBuilder CreateHostBuilder(string[] args) =>
-        Host.CreateDefaultBuilder(args)
-            .ConfigureServices((hostContext, services) =>
-            {
-                // Register TcpServer, Router, UserService, and Database
-                services.AddSingleton<TcpServer>();
-                services.AddSingleton<Router>();
-                services.AddSingleton<UserService>();
-                services.AddSingleton<Database>();
-                services.AddSingleton<CardService>();
-                services.AddSingleton<Package>();
+    Host.CreateDefaultBuilder(args)
+        .ConfigureServices((hostContext, services) =>
+        {
+            // Register the connection string for dependency injection
+            string connectionString = $"Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432";
 
-                // Register the connection string and NpgsqlConnection for dependency injection
-                services.AddSingleton<NpgsqlConnection>(provider =>
-                    new NpgsqlConnection(connectionString));
-            });
+            // Register NpgsqlConnection as a singleton
+            services.AddSingleton<NpgsqlConnection>(_ => new NpgsqlConnection(connectionString));
+
+            // Register services and classes
+            services.AddSingleton<TcpServer>();
+            services.AddSingleton<Router>();
+            services.AddSingleton<UserService>();
+            services.AddSingleton<Database>();
+            services.AddSingleton<CardService>();
+            services.AddSingleton<Package>();
+            services.AddTransient<Card>(); // Use transient if you're instantiating per usage
+        });
+
 }
