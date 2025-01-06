@@ -17,40 +17,34 @@ namespace SWE.Models
         public List<Card> Cards { get; set; }
 
 
-        public async Task<Deck> GetDeckForUser(User user)
+        public async Task<Deck> GetDeckForUser(User user)   //hole das Deck fuer den User
         {
             string connectionString = "Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432";
 
-            // Create a connection to your PostgreSQL database
-            using (var connection = new NpgsqlConnection(connectionString)) // Ensure _connectionString is your connection string
+            using (var connection = new NpgsqlConnection(connectionString))
             {
                 await connection.OpenAsync();
 
-                // Create the query to fetch the user's deck
-                var deckQuery = "SELECT * FROM decks WHERE user_id = @userId";
+                var deckQuery = "SELECT * FROM decks WHERE user_id = @userId";  //hole alles aus decks wo user_id = userId
                 var deckCommand = new NpgsqlCommand(deckQuery, connection);
                 deckCommand.Parameters.AddWithValue("@userId", user.id);
 
-                // Execute the query to retrieve the deck
                 using (var reader = await deckCommand.ExecuteReaderAsync())
                 {
                     if (await reader.ReadAsync())
                     {
-                        // Retrieve deck information from the reader
                         int deckId = reader.GetInt32(reader.GetOrdinal("id"));
                         string deckName = reader.GetString(reader.GetOrdinal("name"));
 
-                        // Fetch cards associated with the deck
                         var cards = new List<Card>();
-                        var cardQuery = "SELECT * FROM cards WHERE deck_id = @deckId";
+                        var cardQuery = "SELECT * FROM cards WHERE deck_id = @deckId";  //hole alles aus cards wo deck_id = deckId
                         var cardCommand = new NpgsqlCommand(cardQuery, connection);
                         cardCommand.Parameters.AddWithValue("@deckId", deckId);
 
                         using (var cardReader = await cardCommand.ExecuteReaderAsync())
                         {
-                            while (await cardReader.ReadAsync())
+                            while (await cardReader.ReadAsync())    //solange es noch karten gibt
                             {
-                                // Assuming the card has an id and name or other fields
                                 Guid cardId = cardReader.GetGuid(cardReader.GetOrdinal("id"));
                                 string cardName = cardReader.GetString(cardReader.GetOrdinal("name"));
                                 var card = new Card(connection) { id = cardId, name = cardName };
@@ -59,7 +53,6 @@ namespace SWE.Models
                             }
                         }
 
-                        // Create a Deck object and return it
                         var deck = new Deck
                         {
                             Id = deckId,
@@ -71,8 +64,7 @@ namespace SWE.Models
                     }
                     else
                     {
-                        // No deck found for the user, return an empty or null deck
-                        return new Deck { Cards = new List<Card>() }; // Or handle as appropriate
+                        return new Deck { Cards = new List<Card>() }; 
                     }
                 }
             }

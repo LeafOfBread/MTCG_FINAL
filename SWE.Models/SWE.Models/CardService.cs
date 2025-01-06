@@ -12,11 +12,9 @@ namespace SWE.Models
 
         public CardService()
         {
-            // Initialize an empty list or load from database
             _cards = new List<Card>();
         }
 
-        // Adds a new card to the collection
         public void AddCard(Card card)
         {
             if (_cards.Any(c => c.id == card.id))
@@ -27,13 +25,12 @@ namespace SWE.Models
             _cards.Add(card);
         }
 
-        // Retrieves all cards
         public List<Card> GetAllCards()
         {
             return _cards;
         }
 
-        // Retrieves a card by its ID
+        // Retrieves card by ID
         public Card GetCardById(Guid cardId)
         {
             var card = _cards.FirstOrDefault(c => c.id == cardId);
@@ -57,8 +54,6 @@ namespace SWE.Models
             existingCard.name = updatedCard.name;
             existingCard.damage = updatedCard.damage;
         }
-
-        // Deletes a card by ID
         public void DeleteCard(Guid cardId)
         {
             var card = _cards.FirstOrDefault(c => c.id == cardId);
@@ -72,19 +67,13 @@ namespace SWE.Models
 
         public async Task SaveCardsAsync(List<Card> cards)
         {
-            // Example: simulate saving data with a delay
-            await Task.Delay(500); // Simulating an async operation (e.g., saving to a database)
+            await Task.Delay(500);
 
-            // Assuming you are saving the cards to a persistent storage (e.g., a database or file system)
-            // Here, just adding them to the list for demonstration
+
             foreach (var card in cards)
             {
-                // Simulate saving each card (e.g., to a database)
-                // In a real scenario, you would use an ORM or file system I/O here
                 _cards.Add(card);
             }
-
-            // Simulate success or error, for example, returning the count of saved cards
             Console.WriteLine($"{cards.Count} cards saved successfully!");
         }
     }

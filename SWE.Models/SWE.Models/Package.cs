@@ -11,6 +11,7 @@ namespace SWE.Models
 {
     public class Package
     {
+        //dependency injection
         private readonly Card _cardService;
         private readonly UserService _userService;
 
@@ -22,9 +23,7 @@ namespace SWE.Models
         }
 
         public string id { get; set; }
-        public string name { get; set; }
-        public double damage { get; set; }
-        public List<Card> cardsInPack { get; set; } = new List<Card>();
+        public List<Card> cardsInPack { get; set; } = new List<Card>(); //liste aller karten im pack
 
         private static readonly string host = "localhost";
         private static readonly string username = "postgres";
@@ -42,10 +41,10 @@ namespace SWE.Models
                 if (body.Count != 5)
                 {
                     Console.WriteLine("Not enough Cards");
-                    return (null, 400); // Return 400 for bad request
+                    return (null, 400);
                 }
 
-                // Generate a new package ID
+                // Generate package ID
                 var packageId = Guid.NewGuid();
                 string insertPackageQuery = "INSERT INTO packages (package_id) VALUES (@packageId)";
 
@@ -100,43 +99,32 @@ namespace SWE.Models
 
         public async Task<List<Card>> GetPackageCardsAsync(int packageId)
         {
-            List<Card> packageCards = new List<Card>();
+            const string query = "SELECT id, name, damage FROM public.cards WHERE package_id = @packageId";
+            var cards = new List<Card>();
 
-            const string query = @"
-    SELECT c.id, c.name, c.damage 
-    FROM cards c
-    JOIN package_cards pc ON c.id = pc.card_id
-    WHERE pc.package_id = @packageId";
-
-            using (var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432"))
+            using (var connection = new NpgsqlConnection(connectionString))
             {
                 await connection.OpenAsync();
+
                 using (var command = new NpgsqlCommand(query, connection))
                 {
-                    command.Parameters.AddWithValue("@packageId", packageId); // Pass the correct packageId
+                    command.Parameters.AddWithValue("@packageId", packageId);
+
                     using (var reader = await command.ExecuteReaderAsync())
                     {
-                        while (reader.Read())
+                        while (await reader.ReadAsync())
                         {
-                            packageCards.Add(new Card(connection)
+                            var card = new Card(reader.GetString(1))
                             {
-                                id = reader.GetGuid(reader.GetOrdinal("id")),
-                                name = reader.GetString(reader.GetOrdinal("name")),
-                                damage = reader.GetDouble(reader.GetOrdinal("damage"))
-                            });
+                                id = reader.GetGuid(0),
+                                damage = reader.GetDouble(2)
+                            };
+                            cards.Add(card);
                         }
                     }
                 }
             }
-
-            return packageCards;
+            return cards;
         }
-
     }
-
-    public class CreatePackageRequest
-    {
-        public List<Package> Cards { get; set; }
-    }
-
 }

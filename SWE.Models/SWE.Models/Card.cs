@@ -43,8 +43,6 @@ namespace SWE.Models
 
         public static CardType GetCardType(string cardName)
         {
-            // Logic to determine CardType based on cardName
-            // For example:
             if (cardName.Contains("Monster"))
             {
                 return CardType.Monster;
@@ -53,13 +51,11 @@ namespace SWE.Models
             {
                 return CardType.Spell;
             }
-            return CardType.Monster;  // Default
+            return CardType.Monster;
         }
 
         public static ElementType GetElementalType(string cardName)
         {
-            // Logic to determine ElementalType based on cardName
-            // For example:
             if (cardName.Contains("Fire"))
             {
                 return ElementType.Fire;
@@ -68,10 +64,9 @@ namespace SWE.Models
             {
                 return ElementType.Water;
             }
-            return ElementType.Normal;  // Default
+            return ElementType.Normal;
         }
 
-        // Method to set card type and element based on name
         public void SetCardTypeAndElement()
         {
             if (name.Contains("Spell", StringComparison.OrdinalIgnoreCase))
@@ -84,7 +79,7 @@ namespace SWE.Models
             }
             else
             {
-                Type = CardType.Monster; // Default to Monster if no type is identified
+                Type = CardType.Monster;
             }
 
             if (name.Contains("Fire", StringComparison.OrdinalIgnoreCase))
@@ -97,12 +92,12 @@ namespace SWE.Models
             }
             else
             {
-                Element = ElementType.Normal; // Default to Normal if no element is identified
+                Element = ElementType.Normal;
             }
         }
 
 
-        // Method to add card to the database (no changes needed here)
+        //add card to the database
         public async Task AddCardAsync(Card card, string connectionString)
         {
             const string insertPackageQuery = "INSERT INTO public.packages DEFAULT VALUES RETURNING package_id";
@@ -117,14 +112,14 @@ namespace SWE.Models
                     {
                         try
                         {
-                            // Insert package and get package_id
+                            // Insert package  get package_id
                             int packageId = 0;
                             using (var command = new NpgsqlCommand(insertPackageQuery, connection, transaction))
                             {
                                 packageId = (int)await command.ExecuteScalarAsync();
                             }
 
-                            // Insert card with the package_id, type, and element
+                            // Insert card with package_id, type, and element
                             using (var command = new NpgsqlCommand(insertCardQuery, connection, transaction))
                             {
                                 command.Parameters.AddWithValue("@id", card.id);
@@ -136,12 +131,10 @@ namespace SWE.Models
                                 await command.ExecuteNonQueryAsync();
                             }
 
-                            // Commit the transaction
                             await transaction.CommitAsync();
                         }
                         catch (Exception ex)
                         {
-                            // Rollback if any exception occurs
                             await transaction.RollbackAsync();
                             Console.WriteLine($"Error inserting card and package: {ex.Message}");
                             throw;
@@ -156,7 +149,7 @@ namespace SWE.Models
             }
         }
 
-        // Method to add cards to user's inventory (no changes needed here)
+        //add cards to user inventory
         public async Task AddCardsToUserInventoryAsync(User user, List<Card> cards)
         {
             const string query = "INSERT INTO user_cards (user_id, card_id) VALUES (@userId, @cardId)";

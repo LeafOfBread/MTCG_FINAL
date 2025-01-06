@@ -42,7 +42,7 @@ public class Program
                 var connectionString = "Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432";
                 var connection = new NpgsqlConnection(connectionString);
                 return new UserService(connection);
-            }); services.AddSingleton<Database>();
+            }); //ervices.AddSingleton<Database>();
             services.AddSingleton<CardService>();
             services.AddSingleton<Package>();
             services.AddTransient<Card>();

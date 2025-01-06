@@ -139,29 +139,29 @@ namespace SWE.Models
 
                     Console.WriteLine($"Request Body: {requestBody}");
 
-                    if (method == "POST")
+                    if (method == "POST")   //routing
                     {
                         switch (path)
                         {
                             case "/sessions":
-                                await HandleLogin(requestBody, new Dictionary<string, string>(), writer);
+                                await HandleLogin(requestBody, new Dictionary<string, string>(), writer);   //login
                                 break;
 
                             case "/users":
-                                await HandleRegisterUser(requestBody, new Dictionary<string, string>(), writer);
+                                await HandleRegisterUser(requestBody, new Dictionary<string, string>(), writer);    //register
                                 break;
 
                             case "/packages":
-                                var parsedBody = JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(requestBody);
-                                await HandlePackages(parsedBody, authHeader, stream);
+                                var parsedBody = JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(requestBody); 
+                                await HandlePackages(parsedBody, authHeader, stream);   //packages createn
                                 break;
 
                             case string _ when path.StartsWith("/transactions/packages"):
                                 Console.WriteLine("authHeader: " + authHeader);
-                                await HandleAcquirePackages(authHeader, stream);
+                                await HandleAcquirePackages(authHeader, stream);        //karten aus den packages and die user geben
                                 break;
 
-                            case "/battles":
+                            case "/battles":                                                        //funktioniert leider nicht.. :(
                                 string authToken = authHeader.Replace("Bearer ", "").Trim();
                                 Console.WriteLine("Token: " + authToken);
                                 var userService = _serviceProvider.GetRequiredService<UserService>();
@@ -189,21 +189,21 @@ namespace SWE.Models
                         {
                             case "/cards":
                                 Console.WriteLine("authHeader: " + authHeader);
-                                await HandleCardListing(authHeader, writer);
+                                await HandleCardListing(authHeader, writer);            //alle karten anzeigen
                                 break;
 
                             case "/deck":
-                                await HandleListPlayingDeck(authHeader, writer);
+                                await HandleListPlayingDeck(authHeader, writer);        //deck anzeigen
                                 break;
 
                             case "/stats":
                                 string authToken = authHeader.Replace("Bearer ", "").Trim();
                                 Console.WriteLine("user token: " + authToken);
-                                await HandleGetUser(authToken.Replace("-mtcgToken", ""), authToken, writer, false);
+                                await HandleGetUser(authToken.Replace("-mtcgToken", ""), authToken, writer, false); //stats anzeigen
                                 break;
 
                             case "/scoreboard":
-                                await HandleScoreBoard(writer);
+                                await HandleScoreBoard(writer); //scoreboar anzeigen lassen
                                 break;
 
                             default:
@@ -219,7 +219,7 @@ namespace SWE.Models
                                     }
                                     else
                                     {
-                                        await HandleGetUser(username, token, writer, true);
+                                        await HandleGetUser(username, token, writer, true);     //user anzeigen
                                     }
                                 }
 
@@ -235,7 +235,7 @@ namespace SWE.Models
                         switch (path)
                         {
                             case "/deck":
-                                await HandleDeckUpdate(authHeader, requestBody, writer);
+                                await HandleDeckUpdate(authHeader, requestBody, writer);        //deck updaten
                                 break;
 
                             default:
@@ -251,7 +251,7 @@ namespace SWE.Models
                                     }
                                     else
                                     {
-                                        await HandleEditProfile(username, authToken, writer, requestBody);
+                                        await HandleEditProfile(username, authToken, writer, requestBody);      //profil anpassen
                                     }
                                 }
                                 else
@@ -338,7 +338,6 @@ namespace SWE.Models
                 await userService.UpdateUserAsync(player1);
                 await userService.UpdateUserAsync(player2);
 
-                // Prepare and send response back with battle log
                 var response = new
                 {
                     message = "Battle completed",
@@ -350,7 +349,6 @@ namespace SWE.Models
             }
             else
             {
-                // If only one player is available, enqueue the player again and inform them they are waiting
                 lock (battleQueueLock)
                 {
                     if (battleQueue.Count >= 2)
@@ -360,7 +358,6 @@ namespace SWE.Models
                     }
                     else
                     {
-                        // If not enough players, re-enqueue the current player and exit
                         battleQueue.Enqueue(currentPlayer);
                         return;
                     }
@@ -370,8 +367,7 @@ namespace SWE.Models
         }
         private async Task<(List<string> log, string winner)> SimulateBattle(User player1, User player2, List<string> battleLog)
         {
-            // Simulate the battle logic here and populate battleLog
-            string winner = "player1";  // Example of the winner determination logic
+            string winner = "player1";
             return (battleLog, winner);
         }
 
@@ -379,17 +375,15 @@ namespace SWE.Models
         {
             try
             {
-                // Establish the connection to the database
+                //datenbank connection erstellen
                 var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
                 await connection.OpenAsync();
 
-                // Query to fetch all players, ordered by ELO in descending order
                 string getScoreboardQuery = @"
-        SELECT username, elo FROM users ORDER BY elo DESC";
+        SELECT username, elo FROM users ORDER BY elo DESC"; //query um alle user nach elo zu sortieren
 
                 List<User> players = new List<User>();
 
-                // Fetch data from the database
                 using (var command = new NpgsqlCommand(getScoreboardQuery, connection))
                 using (var reader = await command.ExecuteReaderAsync())
                 {
@@ -403,14 +397,12 @@ namespace SWE.Models
                     }
                 }
 
-                // If no players found, send a 404 response
                 if (players.Count == 0)
                 {
                     await SendResponse(writer, 404, "No players found");
                     return;
                 }
-
-                // Prepare the response with the leaderboard
+                    //response besser anzeigen
                 StringBuilder responseBuilder = new StringBuilder();
                 responseBuilder.AppendLine("Scoreboard:");
 
@@ -419,12 +411,10 @@ namespace SWE.Models
                     responseBuilder.AppendLine($"{player.username} - ELO: {player.elo}");
                 }
 
-                // Send the response with the scoreboard
                 await SendResponse(writer, 200, responseBuilder.ToString());
             }
             catch (Exception ex)
             {
-                // Log any errors that occur during the database operation or response sending
                 await SendResponse(writer, 500, $"Internal Server Error: {ex.Message}");
                 Console.WriteLine($"Error in HandleScoreBoard: {ex.Message}");
             }
@@ -433,7 +423,7 @@ namespace SWE.Models
 
         public async Task HandleEditProfile(string username, string authToken, StreamWriter writer, string requestBody)
         {
-            // Extract the token (remove "Bearer " prefix) from the Authorization header
+            // token extrahieren und trimmen
             string inputToken = authToken.Replace("Bearer ", "").Trim();
             Console.WriteLine("Username: " + username);
             Console.WriteLine("Auth Token: " + inputToken);
@@ -444,7 +434,6 @@ namespace SWE.Models
                 return;
             }
 
-            // Verify user based on authToken
             var userService = _serviceProvider.GetRequiredService<UserService>();
             int? userId = await userService.GetUserIdByTokenAsync(username + "-mtcgToken");
 
@@ -455,21 +444,19 @@ namespace SWE.Models
             }
             Console.WriteLine("User ID: " + userId);
 
-            // Deserialize the request body
+            // Deserialize body
             UserProfileUpdateRequest updateRequest = JsonConvert.DeserializeObject<UserProfileUpdateRequest>(requestBody);
 
-            // Validate the update request (optional but recommended)
             if (updateRequest == null || string.IsNullOrEmpty(updateRequest.Name))
             {
                 await SendResponse(writer, 400, "Bad Request: Invalid input");
                 return;
             }
 
-            // Update the user's profile in the database
             var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
             await connection.OpenAsync();
 
-            string updateUserQuery = @"
+            string updateUserQuery = @" //query um user zu updaten
         UPDATE users 
         SET username = @Name, bio = @Bio, image = @Image 
         WHERE id = @userId";
@@ -490,7 +477,7 @@ namespace SWE.Models
                 }
                 else
                 {
-                    // Something went wrong or user profile not found
+                    // etwas ist schiefgelaufen
                     await SendResponse(writer, 404, "User not found");
                 }
             }
@@ -508,7 +495,6 @@ namespace SWE.Models
             }
 
 
-            // Verify user based on authToken
             string usernameWithToken = username + "-mtcgToken";
             Console.WriteLine("usernameWithToken " + usernameWithToken);
             var userService = _serviceProvider.GetRequiredService<UserService>();
@@ -523,7 +509,6 @@ namespace SWE.Models
             }
             Console.WriteLine("User ID: " + userId);
 
-            // Set the query and fields based on `justProfile` flag
             var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
             await connection.OpenAsync();
 
@@ -543,16 +528,16 @@ namespace SWE.Models
                         user = new User
                         {
                             username = reader.GetString(0),
-                            bio = reader.IsDBNull(1) ? null : reader.GetString(1),  // Handle nullable bio
-                            image = reader.IsDBNull(2) ? null : reader.GetString(2)  // Handle nullable image
+                            bio = reader.IsDBNull(1) ? null : reader.GetString(1),
+                            image = reader.IsDBNull(2) ? null : reader.GetString(2)
                         };
 
                         if (!justProfile)
                         {
-                            user.elo = reader.GetInt32(3);    // ELO
-                            user.coins = reader.GetInt32(4);  // Coins
-                            user.wins = reader.GetInt32(5);   // Wins
-                            user.losses = reader.GetInt32(6); // Losses
+                            user.elo = reader.GetInt32(3);
+                            user.coins = reader.GetInt32(4);
+                            user.wins = reader.GetInt32(5);
+                            user.losses = reader.GetInt32(6);
                         }
                     }
                 }
@@ -586,7 +571,6 @@ namespace SWE.Models
         public async Task HandleDeckUpdate(string authToken, string body, StreamWriter writer)
         {
 
-            // Strip "Bearer " from token
             string inputToken = authToken.Replace("Bearer ", "").Trim();
 
             if (string.IsNullOrEmpty(inputToken))
@@ -595,7 +579,6 @@ namespace SWE.Models
                 return;
             }
 
-            // Verify user based on authToken
             var userService = _serviceProvider.GetRequiredService<UserService>();
             int? userId = await userService.GetUserIdByTokenAsync(inputToken);
 
@@ -605,10 +588,8 @@ namespace SWE.Models
                 return;
             }
 
-            // Parse the body into a list of card IDs (UUIDs)
             List<Guid> cardIds = JsonConvert.DeserializeObject<List<Guid>>(body);
 
-            // Ensure exactly 4 cards are provided
             if (cardIds.Count != 4)
             {
                 await SendResponse(writer, 400, "Invalid number of cards. You must provide exactly 4 cards.");
@@ -620,7 +601,7 @@ namespace SWE.Models
 
             var validCardIds = new List<Guid>();
 
-            // Ensure that all provided cards belong to the user
+            // sicherstellen dass alle karten dem nutzer gehören
             foreach (var cardGuid in cardIds)
             {
                 var checkCardQuery = "SELECT 1 FROM cards c JOIN users u ON c.user_id = u.id WHERE c.id = @cardId AND c.user_id = @userId";
@@ -636,14 +617,14 @@ namespace SWE.Models
                 }
             }
 
-            // If fewer than 4 valid cards, return a 400 error
+            //weniger als 4 karten == error
             if (validCardIds.Count != 4)
             {
                 await SendResponse(writer, 400, "One or more cards do not belong to the user or the number of valid cards is incorrect.");
                 return;
             }
 
-            // Clear the user's current deck
+            // Clear user deck
             var clearDeckQuery = "DELETE FROM user_deck WHERE user_id = @userId";
             using (var command = new NpgsqlCommand(clearDeckQuery, connection))
             {
@@ -651,7 +632,7 @@ namespace SWE.Models
                 await command.ExecuteNonQueryAsync();
             }
 
-            // Insert the new cards into the user's deck
+            // Insert cards
             foreach (var cardId in validCardIds)
             {
                 var insertDeckQuery = "INSERT INTO user_deck (user_id, card_id) VALUES (@userId, @cardId)";
@@ -663,7 +644,7 @@ namespace SWE.Models
                 }
             }
 
-            // Fetch the updated deck and send it as a formatted response
+            // Fetch updated
             var getDeckQuery = "SELECT c.id, c.name, c.damage FROM cards c JOIN user_deck ud ON c.id = ud.card_id WHERE ud.user_id = @userId";
             var userDeck = new List<Card>();
 
@@ -686,20 +667,17 @@ namespace SWE.Models
                 }
             }
 
-            // Pad the response with placeholders if the deck has fewer than 4 cards
             while (userDeck.Count < 4)
             {
                 userDeck.Add(new Card(connection) { name = "InvalidCard", damage = 0 });
             }
 
-            // Build the response with a user-friendly format: "Name: ___ Damage: ___"
             StringBuilder responseBuilder = new StringBuilder();
             foreach (var card in userDeck)
             {
                 responseBuilder.AppendLine($"Name: {card.name} Damage: {card.damage} Type: {card.Type} Element: {card.Element}");
             }
 
-            // Send the response with the formatted deck
             await SendResponse(writer, 200, responseBuilder.ToString());
         }
 
@@ -711,10 +689,8 @@ namespace SWE.Models
                 await SendResponse(writer, 401, "Unauthorized");
                 return;
             }
-            // Remove the "Bearer " prefix if present
             string inputToken = authToken.Replace("Bearer ", "").Trim();
 
-            // Verify user based on authToken
             var userService = _serviceProvider.GetRequiredService<UserService>();
             int userId = await userService.GetUserIdByTokenAsync(inputToken);
 
@@ -755,29 +731,24 @@ WHERE ud.user_id = @userId";
                 }
             }
 
-            // Check if the deck is empty
             if (userDeck.Count == 0)
             {
-                // Return a 200 OK response with an empty list
                 string response = JsonConvert.SerializeObject(new List<Card>());
                 await SendResponse(writer, 200, response);
             }
             else
             {
-                // Build the response in the required format
                 StringBuilder responseBuilder = new StringBuilder();
 
                 foreach (var card in userDeck)
                 {
-                    // Append the card details in the format "Name: <card_name>\nDamage: <card_damage>"
                     responseBuilder.AppendLine($"Name: {card.name}");
                     responseBuilder.AppendLine($"Damage: {card.damage}");
                     responseBuilder.AppendLine($"Type: {card.Type}");
                     responseBuilder.AppendLine($"Element: {card.Element}");
-                    responseBuilder.AppendLine();  // Add an empty line between each card
+                    responseBuilder.AppendLine();
                 }
 
-                // Convert the StringBuilder to string and send the response
                 string response = responseBuilder.ToString();
                 await SendResponse(writer, 200, response);
             }
@@ -791,15 +762,13 @@ WHERE ud.user_id = @userId";
             await connection.OpenAsync();
             var userService = _serviceProvider.GetRequiredService<UserService>();
 
-            // Verify user based on authToken
             int userId = await userService.GetUserIdByTokenAsync(inputToken);
             if (userId == null)
             {
                 SendResponsePackage(stream, 401, "Unauthorized");
                 return -1;
             }
-
-            // Get the user's coin balance
+            //user coin balance
             const string getUserCoinsQuery = @"
     SELECT coins
     FROM users
@@ -827,8 +796,7 @@ WHERE ud.user_id = @userId";
                 SendResponsePackage(stream, 400, "Not enough coins");
                 return -1;
             }
-
-            // Get a random package
+            //bekomme das erste package mit 5 karten
             const string getPackageQuery = @"
 SELECT p.package_id
 FROM packages p
@@ -937,7 +905,7 @@ LIMIT 1";
                 return;
             }
 
-            // Fetch the user's cards from the database
+            // Fetch user's cards 
             var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
             await connection.OpenAsync();
 
@@ -965,21 +933,17 @@ LIMIT 1";
                 }
             }
 
-            // Check if the list of cards is empty
             if (userCards.Count == 0)
             {
-                // Return a 200 OK response with an empty list
                 string response = JsonConvert.SerializeObject(new List<Card>());
                 await SendResponse(writer, 200, response);
             }
             else
             {
-                // Respond with the user's cards in JSON format
                 string response = JsonConvert.SerializeObject(userCards);
                 await SendResponse(writer, 200, response);
             }
         }
-
 
         public async Task<int> HandlePackages(List<Dictionary<string, object>> receive, string Auth, NetworkStream stream)
         {
@@ -990,7 +954,6 @@ LIMIT 1";
             var packagesINT = new Package(cardService, userService).createPackage(Auth, receive, connection);
             if (packagesINT.Item2 == 0)
             {
-                // packs.Add(packagesINT.Item1);
                 Console.WriteLine("Packages created by Admin");
                 SendResponsePackage(stream, 201, "");
                 return 0;
@@ -998,10 +961,6 @@ LIMIT 1";
             SendResponsePackage(stream, 404, "not Authorized");
             return -1;
         }
-
-
-
-
         private async Task HandleLogin(string body, Dictionary<string, string> headers, StreamWriter writer)
         {
             using var scope = _serviceProvider.CreateScope();
@@ -1070,11 +1029,10 @@ LIMIT 1";
                 _ => "Unknown"
             };
 
-            // HTTP/1.1 response
             string response = $"HTTP/1.1 {statusCode} {statusDescription}\r\n" +
                               "Content-Type: application/json\r\n" +
-                              "Connection: close\r\n" +  // Close the connection after the response
-                              "\r\n" +  // End of headers
+                              "Connection: close\r\n" +
+                              "\r\n" + 
                               message;
 
             byte[] responseBytes = Encoding.UTF8.GetBytes(response);
@@ -1083,16 +1041,13 @@ LIMIT 1";
 
         private async Task SendResponse(StreamWriter writer, int statusCode, string message)
         {
-            // Construct the full response
             string response = $"HTTP/1.1 {statusCode} OK\r\n";
             response += $"Content-Type: application/json\r\n";
-            response += $"Content-Length: {message.Length}\r\n"; // Length of the actual message
+            response += $"Content-Length: {message.Length}\r\n"; //länge der messages
             response += "\r\n"; // End of headers
-            response += message; // The actual message content
-
-            // Write the full response
+            response += message; // message content
             await writer.WriteAsync(response);
-            await writer.FlushAsync();  // Ensure the response is fully flushed
+            await writer.FlushAsync();  //flush
         }
 
     }

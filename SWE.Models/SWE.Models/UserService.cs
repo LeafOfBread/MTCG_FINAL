@@ -14,10 +14,10 @@ public class UserService
     }
     public string connectionString = "Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432";
 
-            
+
     public async Task<User> GetUserByUsernameAsync(string username)
     {
-        const string query = "SELECT * FROM users WHERE username = @username";
+        const string query = "SELECT * FROM users WHERE username = @username";  //query um user zu finden via username
 
         using (var command = new NpgsqlCommand(query, _connection))
         {
@@ -32,7 +32,7 @@ public class UserService
             {
                 if (await reader.ReadAsync())
                 {
-                    return new User
+                    return new User //setzt alle werte aus der db
                     {
                         id = reader.GetInt32(reader.GetOrdinal("id")),
                         username = reader.GetString(reader.GetOrdinal("username")),
@@ -46,7 +46,7 @@ public class UserService
             }
         }
 
-        return null;
+        return null;    //falls faehlschlaegt
     }
 
     public async Task<int> GetUserIdByTokenAsync(string token)
@@ -54,7 +54,7 @@ public class UserService
         if (string.IsNullOrEmpty(token))
             throw new ArgumentException("Token must not be null or empty.", nameof(token));
 
-        const string query = "SELECT * FROM users WHERE token = @token";
+        const string query = "SELECT * FROM users WHERE token = @token";    //query um user zu finden via token
 
         int returningId;
 
@@ -81,7 +81,7 @@ public class UserService
 
     public async Task SaveUserAsync(User user)
     {
-        const string query = "INSERT INTO users (username, password, token) VALUES (@username, @password, @token)";
+        const string query = "INSERT INTO users (username, password, token) VALUES (@username, @password, @token)"; //query um user zu speichern
 
         using (var command = new NpgsqlCommand(query, _connection))
         {
@@ -116,7 +116,7 @@ public class UserService
 
     public async Task<User> GetUserByIdAsync(int userId)
     {
-        string query = "SELECT id, username, password, elo, coins, wins, losses FROM users WHERE id = @userId LIMIT 1";
+        string query = "SELECT id, username, password, elo, coins, wins, losses FROM users WHERE id = @userId LIMIT 1"; //query um user zu finden via id
 
         using (var connection = new NpgsqlConnection(connectionString))
         {
@@ -130,7 +130,7 @@ public class UserService
                 {
                     if (await reader.ReadAsync())
                     {
-                        return new User
+                        return new User //werte setzen
                         {
                             id = reader.GetInt32(0),
                             username = reader.GetString(1),
@@ -164,7 +164,7 @@ public class UserService
                 await connection.OpenAsync();
             }
 
-            var query = "SELECT c.id, c.name FROM cards c " +
+            var query = "SELECT c.id, c.name FROM cards c " +           //query um deck zu finden via user
                         "INNER JOIN user_decks ud ON ud.card_id = c.id " +
                         "WHERE ud.user_id = @userId";
 
