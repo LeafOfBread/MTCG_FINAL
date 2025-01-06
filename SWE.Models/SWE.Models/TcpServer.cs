@@ -174,6 +174,7 @@ namespace SWE.Models
 
                     else if (path.StartsWith("/transactions/packages") && method == "POST")
                     {
+                        Console.WriteLine("authHeader: " + authHeader);
                         await HandleAcquirePackages(authHeader, stream);
                     }
 
@@ -189,54 +190,138 @@ namespace SWE.Models
             }
         }
 
-        public async Task<int> HandleAcquirePackages(string Auth, NetworkStream stream)
+        public async Task<int> HandleAcquirePackages(string authToken, NetworkStream stream)
         {
-            Console.WriteLine("Debug 4\n");
-            using var scope = _serviceProvider.CreateScope();
-            var userService = scope.ServiceProvider.GetRequiredService<UserService>();
-            var packageService = scope.ServiceProvider.GetRequiredService<Package>();
-            var cardService = scope.ServiceProvider.GetRequiredService<Card>();
-            Console.WriteLine("Debug 3\n");
+            string inputToken = authToken.Replace("Bearer ", "").Trim();
+            var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
+            await connection.OpenAsync();
+            var userService = _serviceProvider.GetRequiredService<UserService>();
 
-            // Step 1: Authenticate the user
-            var token = Auth.Replace("Bearer ", "").Trim();
-            var user = await userService.GetUserByTokenAsync(token);  // Ensure this is awaited
-            Console.WriteLine("Debug 1\n");
-            if (user == null)
+            // Verify user based on authToken
+            int userId = await userService.GetUserIdByTokenAsync(inputToken);
+            if (userId == null)
             {
-                await SendResponsePackage(stream, 401, "Unauthorized");
+                SendResponsePackage(stream, 401, "Unauthorized");
                 return -1;
             }
 
-            // Step 2: Check if the user has enough coins
-            if (user.coins < 5)
+            // Get the user's coin balance
+            const string getUserCoinsQuery = @"
+    SELECT coins
+    FROM users
+    WHERE id = @id";
+
+            int userCoins = 0;
+
+            using (var command = new NpgsqlCommand(getUserCoinsQuery, connection))
             {
-                await SendResponsePackage(stream, 400, "Insufficient coins");
+                command.Parameters.AddWithValue("@id", userId);
+                using (var reader = await command.ExecuteReaderAsync())
+                {
+                    if (await reader.ReadAsync())
+                    {
+                        userCoins = reader.GetInt32(reader.GetOrdinal("coins"));
+                    }
+                }
+            }
+
+            // Assume each package costs 5 coins
+            const int packageCost = 5;
+
+            if (userCoins < packageCost)
+            {
+                SendResponsePackage(stream, 400, "Not enough coins");
                 return -1;
             }
-            Console.WriteLine("Debug 2\n");
 
-            // Step 3: Get the package ID (you can modify this logic as needed)
-            // You might choose to use a specific package or a random package.
-            var packageId = 1; // Example, replace with logic to get the packageId
+            // Get a random package
+            const string getPackageQuery = @"
+SELECT p.package_id
+FROM packages p
+JOIN cards c ON c.package_id = p.package_id
+WHERE c.user_id IS NULL
+GROUP BY p.package_id
+HAVING COUNT(c.id) = 5
+ORDER BY RANDOM()
+LIMIT 1";
 
-            // Step 4: Acquire the cards from the package
-            var package = await packageService.GetPackageCardsAsync(packageId); // Pass the packageId here
-            if (package == null || package.Count == 0)  // Use Count here after awaiting the task
+
+            Guid? packageId = null;
+
+            using (var command = new NpgsqlCommand(getPackageQuery, connection))
+            using (var reader = await command.ExecuteReaderAsync())
             {
-                await SendResponsePackage(stream, 400, "Package is empty");
+                if (await reader.ReadAsync())
+                {
+                    packageId = reader.GetGuid(0);
+                }
+            }
+
+            if (packageId == null)
+            {
+                SendResponsePackage(stream, 404, "No packages available");
                 return -1;
             }
 
-            // Step 5: Deduct coins and add the cards to the user's inventory
-            await userService.DeductCoinsFromUserAsync(user, 5); // Deduct 5 coins for the purchase
-            await cardService.AddCardsToUserInventoryAsync(user, package); // Add the cards from the package to the user's inventory
+            // Deduct coins from the user
+            const string updateUserCoinsQuery = @"
+    UPDATE users
+    SET coins = coins - @packageCost
+    WHERE id = @id";
 
-            // Step 6: Send success response
-            await SendResponsePackage(stream, 201, "Package acquired successfully");
+            using (var updateCommand = new NpgsqlCommand(updateUserCoinsQuery, connection))
+            {
+                updateCommand.Parameters.AddWithValue("@packageCost", packageCost);
+                updateCommand.Parameters.AddWithValue("@id", userId);
+                await updateCommand.ExecuteNonQueryAsync();
+            }
+
+            // Assign cards to the user
+            const string updateCardsQuery = @"
+    UPDATE cards
+    SET user_id = @id
+    WHERE package_id = @packageId";
+
+            using (var updateCommand = new NpgsqlCommand(updateCardsQuery, connection))
+            {
+                updateCommand.Parameters.AddWithValue("@id", userId);
+                updateCommand.Parameters.AddWithValue("@packageId", packageId);
+                await updateCommand.ExecuteNonQueryAsync();
+            }
+
+            // Retrieve the assigned cards
+            const string getCardsQuery = @"
+    SELECT id, name, damage
+    FROM cards
+    WHERE package_id = @packageId";
+
+            List<Card> assignedCards = new List<Card>();
+
+            using (var getCardsCommand = new NpgsqlCommand(getCardsQuery, connection))
+            {
+                getCardsCommand.Parameters.AddWithValue("@packageId", packageId);
+                using (var reader = await getCardsCommand.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        assignedCards.Add(new Card(connection)
+                        {
+                            id = reader.GetGuid(reader.GetOrdinal("id")),
+                            name = reader.GetString(reader.GetOrdinal("name")),
+                            damage = reader.GetDouble(reader.GetOrdinal("damage"))
+                        });
+                    }
+                }
+            }
+
+            // Respond to the user
+            string response = string.Join(", ", assignedCards.Select(card => $"{card.name} (Damage: {card.damage})"));
+            SendResponsePackage(stream, 200, $"You received: {response}");
 
             return 0;
         }
+
+
 
 
         public async Task<int> HandlePackages(List<Dictionary<string, object>> receive, string Auth, NetworkStream stream)

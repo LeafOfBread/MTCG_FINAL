@@ -8,36 +8,9 @@ using System.Security.Cryptography;
 public class UserService
 {
     private readonly NpgsqlConnection _connection;
-
     public UserService(NpgsqlConnection connection)
     {
         _connection = connection;
-    }
-
-    public async Task<AuthenticationResult> AuthenticateTokenAsync(string token)
-    {
-        try
-        {
-            // Validate token by checking if it matches the stored token
-            var user = await GetUserByTokenAsync(token);
-
-            if (user == null)
-            {
-                return new AuthenticationResult { IsAuthenticated = false };
-            }
-
-            return new AuthenticationResult
-            {
-                IsAuthenticated = true,
-                User = user,
-                Token = token // Optionally return the token if needed
-            };
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error in AuthenticateTokenAsync: {ex.Message}");
-            return new AuthenticationResult { IsAuthenticated = false };
-        }
     }
 
     public async Task<User> GetUserByTokenAsync(string token)
@@ -109,6 +82,36 @@ public class UserService
         return null;
     }
 
+    public async Task<int> GetUserIdByTokenAsync(string token)
+    {
+        if (string.IsNullOrEmpty(token))
+            throw new ArgumentException("Token must not be null or empty.", nameof(token));
+
+        const string query = "SELECT * FROM users WHERE token = @token";
+
+        int returningId;
+
+        using (var command = new NpgsqlCommand(query, _connection))
+        {
+            command.Parameters.AddWithValue("@token", token);
+
+            if (_connection.State != System.Data.ConnectionState.Open)
+            {
+                await _connection.OpenAsync();
+            }
+
+            using (var reader = await command.ExecuteReaderAsync())
+            {
+                if (await reader.ReadAsync())
+                {
+                    returningId = reader.GetInt32(reader.GetOrdinal("id"));
+                    return returningId;
+                }
+            }
+        }
+        return -1;
+    }
+
     public async Task SaveUserAsync(User user)
     {
         const string query = "INSERT INTO users (username, password, token) VALUES (@username, @password, @token)";
@@ -129,35 +132,6 @@ public class UserService
         }
     }
 
-    public async Task DeductCoinsFromUserAsync(User user, int amount)
-    {
-        const string query = "UPDATE users SET coins = coins - @amount WHERE id = @id";
-        using (var command = new NpgsqlCommand(query, _connection))
-        {
-            command.Parameters.AddWithValue("@amount", amount);
-            command.Parameters.AddWithValue("@id", user.id);
-            await command.ExecuteNonQueryAsync();
-        }
-    }
-
-    public async Task UpdateUserTokenAsync(int userId, string token)
-    {
-        const string query = "UPDATE users SET token = @token WHERE id = @id";
-
-        using (var command = new NpgsqlCommand(query, _connection))
-        {
-            command.Parameters.AddWithValue("@token", token);
-            command.Parameters.AddWithValue("@id", userId);
-
-            // Ensure the connection is open
-            if (_connection.State != System.Data.ConnectionState.Open)
-            {
-                await _connection.OpenAsync();
-            }
-
-            await command.ExecuteNonQueryAsync();
-        }
-    }
     public async Task<AuthenticationResult> AuthenticateUserAsync(string username, string password)
     {
         // Fetch the user by username

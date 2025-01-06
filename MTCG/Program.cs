@@ -42,8 +42,12 @@ public class Program
             // Register services and classes
             services.AddSingleton<TcpServer>();
             services.AddSingleton<Router>();
-            services.AddSingleton<UserService>();
-            services.AddSingleton<Database>();
+            services.AddSingleton<UserService>(provider =>
+            {
+                var connectionString = "Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432";
+                var connection = new NpgsqlConnection(connectionString);
+                return new UserService(connection);
+            }); services.AddSingleton<Database>();
             services.AddSingleton<CardService>();
             services.AddSingleton<Package>();
             services.AddTransient<Card>(); // Use transient if you're instantiating per usage
