@@ -85,9 +85,6 @@ namespace SWE.Models
         {
             _serviceProvider = serviceProvider;
             _router = new Router();
-            // Retrieve UserService and Package from the service provider and pass them to InitRoutes
-            var userService = _serviceProvider.GetRequiredService<UserService>();
-            var packageService = _serviceProvider.GetRequiredService<Package>();
             packs = new List<Package>();
         }
 
@@ -245,8 +242,10 @@ namespace SWE.Models
         public async Task<int> HandlePackages(List<Dictionary<string, object>> receive, string Auth, NetworkStream stream)
         {
             var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
+            var cardService = _serviceProvider.GetRequiredService<Card>();
+            var userService = _serviceProvider.GetRequiredService<UserService>();
 
-            var packagesINT = new Package().createPackage(Auth, receive, connection);
+            var packagesINT = new Package(cardService, userService).createPackage(Auth, receive, connection);
             if (packagesINT.Item2 == 0)
             {
                 // packs.Add(packagesINT.Item1);
