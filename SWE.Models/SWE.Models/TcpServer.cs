@@ -45,38 +45,19 @@ namespace SWE.Models
             routes.Add(new Route(method, path, handler));
         }
 
-        private async Task SendResponse(StreamWriter writer, int statusCode, string responseBody)
-        {
-            writer.WriteLine($"HTTP/1.1 {statusCode} {GetStatusCodeDescription(statusCode)}");
-            writer.WriteLine("Content-Type: application/json");
-            writer.WriteLine($"Content-Length: {Encoding.UTF8.GetByteCount(responseBody)}");
-            writer.WriteLine();  // Blank line separating headers and body
-            writer.WriteLine(responseBody);
-        }
-
-        private string GetStatusCodeDescription(int statusCode)
-        {
-            return statusCode switch
-            {
-                200 => "OK",
-                201 => "Created",
-                400 => "Bad Request",
-                401 => "Unauthorized",
-                403 => "Forbidden",
-                404 => "Not Found",
-                500 => "Internal Server Error",
-                _ => "Unknown"
-            };
-        }
     }
 
     //tcp server mit users, sessions und router
     public class TcpServer
     {
+                        //dependency injections
         private readonly IServiceProvider _serviceProvider;
         private readonly Router _router;
         private readonly UserService _userService;
         private readonly Package _packageService;
+        private Queue<User> battleQueue = new Queue<User>();
+        private static readonly object battleQueueLock = new object();
+
 
         private List<Package> packs;
 
@@ -118,9 +99,10 @@ namespace SWE.Models
                     int contentLength = 0;
                     string authHeader = null;
                     string line;
-                    bool headersEnd = false; // Flag to detect end of headers
-                    string requestBody = null; // Declare requestBody here to make it accessible throughout the method
+                    bool headersEnd = false;
+                    string requestBody = null;
 
+                    //parse request
                     while (!headersEnd && !string.IsNullOrEmpty(line = await reader.ReadLineAsync()))
                     {
                         if (line.StartsWith("Content-Length:"))
@@ -131,13 +113,13 @@ namespace SWE.Models
                         {
                             authHeader = line.Split(':')[1].Trim();
                         }
-                        else if (line == "") // Detect end of headers when an empty line is encountered
+                        else if (line == "")
                         {
                             headersEnd = true;
                         }
                     }
 
-                    // Log content length for debugging
+                    // content logging
                     Console.WriteLine($"Content-Length: {contentLength}");
                     Console.WriteLine($"Authorization: {authHeader}");
 
@@ -147,96 +129,138 @@ namespace SWE.Models
                     string method = requestParts[0];
                     string path = requestParts[1].Trim();
 
-                    // Handle body
+                    // body handler
                     if (contentLength > 0)
                     {
                         char[] buffer = new char[contentLength];
                         await reader.ReadAsync(buffer, 0, contentLength);
-                        requestBody = new string(buffer); // Assign the request body here
+                        requestBody = new string(buffer);
                     }
 
                     Console.WriteLine($"Request Body: {requestBody}");
 
-                    // Check if the path is correctly matched to "/users" or "/sessions"
-                    if (path == "/sessions" && method == "POST")
+                    if (method == "POST")
                     {
-                        await HandleLogin(requestBody, new Dictionary<string, string>(), writer);
-                    }
-                    else if (path == "/users" && method == "POST")
-                    {
-                        await HandleRegisterUser(requestBody, new Dictionary<string, string>(), writer);
-                    }
-                    else if (path == "/packages" && method == "POST")
-                    {
-                        List<Dictionary<string, object>> parsedBody = JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(requestBody);
-                        await HandlePackages(parsedBody, authHeader, stream);
-                    }
-                    else if (path.StartsWith("/transactions/packages") && method == "POST")
-                    {
-                        Console.WriteLine("authHeader: " + authHeader);
-                        await HandleAcquirePackages(authHeader, stream);
-                    }
-                    else if (path == "/cards" && method == "GET")
-                    {
-                        Console.WriteLine("authHeader: " + authHeader);
-                        await HandleCardListing(authHeader, writer);
-                    }
-                    else if (path == "/deck" && method == "GET")
-                    {
-                        await HandleListPlayingDeck(authHeader, writer);
-                    }
-                    else if (path == "/deck" && method == "PUT")
-                    {
-                        await HandleDeckUpdate(authHeader, requestBody, writer);
-                    }
-                    else if (path.StartsWith("/users/") && method == "GET")
-                    {
-                        string username = path.Substring(7); // Extract the username (e.g., /users/kienboec => "kienboec")
-                        string authToken = authHeader.Replace("Bearer ", "").Trim();  // Remove "Bearer " part
-                        string usernameFromToken = authToken.Replace("-mtcgToken", "").Trim();
-                        bool justProfile = true;
-                        if (username != usernameFromToken)
+                        switch (path)
                         {
-                            await SendResponse(writer, 403, "Forbidden: Token does not match the requested user");
-                            return;
+                            case "/sessions":
+                                await HandleLogin(requestBody, new Dictionary<string, string>(), writer);
+                                break;
+
+                            case "/users":
+                                await HandleRegisterUser(requestBody, new Dictionary<string, string>(), writer);
+                                break;
+
+                            case "/packages":
+                                var parsedBody = JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(requestBody);
+                                await HandlePackages(parsedBody, authHeader, stream);
+                                break;
+
+                            case string _ when path.StartsWith("/transactions/packages"):
+                                Console.WriteLine("authHeader: " + authHeader);
+                                await HandleAcquirePackages(authHeader, stream);
+                                break;
+
+                            case "/battles":
+                                string authToken = authHeader.Replace("Bearer ", "").Trim();
+                                Console.WriteLine("Token: " + authToken);
+                                var userService = _serviceProvider.GetRequiredService<UserService>();
+                                int? userId = await userService.GetUserIdByTokenAsync(authToken);
+                                Console.WriteLine($"Retrieved userId: {userId}");
+
+                                if (userId == null)
+                                {
+                                    await SendResponse(writer, 401, "Unauthorized");
+                                    return;
+                                }
+                                User player = new User();
+                                player = await userService.GetUserByIdAsync(userId.Value);
+                                await HandleBattle(writer, player.username);
+                                break;
+
+                            default:
+                                await SendResponse(writer, 404, "Not Found");
+                                break;
                         }
-                        // Proceed to handle the user data request
-                        await HandleGetUser(username, authToken, writer, justProfile);
                     }
-                    else if (path.StartsWith("/users/") && method == "PUT")
+                    else if (method == "GET")
                     {
-                        string username = path.Substring(7); // Extract the username (e.g., /users/kienboec => "kienboec")
-                        string authToken = authHeader.Replace("Bearer ", "").Trim();  // Remove "Bearer " part
-                        string usernameFromToken = authToken.Replace("-mtcgToken", "").Trim();
-                        if (username != usernameFromToken)
+                        switch (path)
                         {
-                            await SendResponse(writer, 403, "Forbidden: Token does not match the requested user");
-                            return;
+                            case "/cards":
+                                Console.WriteLine("authHeader: " + authHeader);
+                                await HandleCardListing(authHeader, writer);
+                                break;
+
+                            case "/deck":
+                                await HandleListPlayingDeck(authHeader, writer);
+                                break;
+
+                            case "/stats":
+                                string authToken = authHeader.Replace("Bearer ", "").Trim();
+                                Console.WriteLine("user token: " + authToken);
+                                await HandleGetUser(authToken.Replace("-mtcgToken", ""), authToken, writer, false);
+                                break;
+
+                            case "/scoreboard":
+                                await HandleScoreBoard(writer);
+                                break;
+
+                            default:
+                                if (path.StartsWith("/users/"))
+                                {
+                                    string username = path.Substring(7);
+                                    string token = authHeader.Replace("Bearer ", "").Trim(); 
+                                    string usernameFromToken = token.Replace("-mtcgToken", "").Trim();
+
+                                    if (username != usernameFromToken)
+                                    {
+                                        await SendResponse(writer, 403, "Forbidden: Token does not match the requested user");
+                                    }
+                                    else
+                                    {
+                                        await HandleGetUser(username, token, writer, true);
+                                    }
+                                }
+
+                                else
+                                {
+                                    await SendResponse(writer, 404, "Not Found");
+                                }
+                                break;
                         }
-
-                        // Proceed to handle the user data request
-                        await HandleEditProfile(username, authToken, writer, requestBody);
                     }
-                    else if (path == "/stats" && method == "GET")
+                    else if (method == "PUT")
                     {
-                        string authToken = authHeader.Replace("Bearer ", "").Trim();  // Remove "Bearer " part
-                        string usernameFromToken = authToken.Replace("-mtcgToken", "").Trim();
-                        Console.WriteLine("user token: " + usernameFromToken);
-                        bool justProfile = false;
-                        string username = "";
-                        // Proceed to handle the user stats request
-                        await HandleGetUser(usernameFromToken, authToken, writer, justProfile);
-                    }
+                        switch (path)
+                        {
+                            case "/deck":
+                                await HandleDeckUpdate(authHeader, requestBody, writer);
+                                break;
 
-                    else if (path == "/scoreboard" && method == "GET")
-                    {
-                        await HandleScoreBoard(writer);
-                    }
-                    else if (path == "/battles" && method == "POST")
-                    {
-                        await HandleBattle(writer);
-                    }
+                            default:
+                                if (path.StartsWith("/users/"))
+                                {
+                                    string username = path.Substring(7);
+                                    string authToken = authHeader.Replace("Bearer ", "").Trim();
+                                    string usernameFromToken = authToken.Replace("-mtcgToken", "").Trim();
 
+                                    if (username != usernameFromToken)
+                                    {
+                                        await SendResponse(writer, 403, "Forbidden: Token does not match the requested user");
+                                    }
+                                    else
+                                    {
+                                        await HandleEditProfile(username, authToken, writer, requestBody);
+                                    }
+                                }
+                                else
+                                {
+                                    await SendResponse(writer, 404, "Not Found");
+                                }
+                                break;
+                        }
+                    }
                     else
                     {
                         await SendResponse(writer, 404, "Not Found");
@@ -249,45 +273,106 @@ namespace SWE.Models
             }
         }
 
-
-        private async Task HandleBattle(StreamWriter writer)
+        private async Task HandleBattle(StreamWriter writer, string authHeader)
         {
-            // You will need a queue to store players who want to battle
-            var battleQueue = new Queue<User>();
+            var userService = _serviceProvider.GetRequiredService<UserService>();
+            int userId;
+            userId = await userService.GetUserIdByTokenAsync(authHeader);
 
-            if (battleQueue.Count < 2)
+            if (userId == null)
             {
-                await SendResponse(writer, 400, "Not enough players to start a battle");
+                await SendResponse(writer, 401, "Unauthorized");
                 return;
             }
 
-            // Get the first two players in the queue
-            var player1 = battleQueue.Dequeue();
-            var player2 = battleQueue.Dequeue();
+            User currentPlayer = await userService.GetUserByIdAsync(userId);
 
-            // Simulate the battle logic (you can replace this with your actual battle logic)
-            var battleResult = await SimulateBattle(player1, player2);
-
-            // Send the battle result back to both players
-            StringBuilder responseBuilder = new StringBuilder();
-            responseBuilder.AppendLine($"Battle Result: {battleResult}");
-            await SendResponse(writer, 200, responseBuilder.ToString());
-        }
-        private async Task<string> SimulateBattle(User player1, User player2)
-        {
-            // Simulate a simple battle where player with the higher ELO wins
-            if (player1.elo > player2.elo)
+            var deck = await userService.GetDeckForUser(currentPlayer);
+            if (deck.Cards.Count < 4)
             {
-                return $"{player1.username} wins!";
+                await SendResponse(writer, 400, "{\"message\": \"Build a valid Deck First\"}");
+                return;
             }
-            else if (player2.elo > player1.elo)
+
+            lock (battleQueueLock)
             {
-                return $"{player2.username} wins!";
+                battleQueue.Enqueue(currentPlayer);
+                Console.WriteLine($"Player {currentPlayer.username} added to queue. Queue size: {battleQueue.Count}");
+            }
+
+            User player1 = null, player2 = null;
+
+            lock (battleQueueLock)
+            {
+                if (battleQueue.Count >= 2)
+                {
+                    battleQueue.TryDequeue(out player1);
+                    battleQueue.TryDequeue(out player2);
+                }
+            }
+
+            if (player1 != null && player2 != null)
+            {
+                // Simulate the battle logic
+                List<string> battleLog = new List<string>();
+
+                var (log, winner) = await SimulateBattle(player1, player2, battleLog);
+
+                // Update player stats based on the result
+                if (winner == player1.username)
+                {
+                    player1.wins++;
+                    player2.losses++;
+                    player1.elo += 3;
+                    player2.elo = Math.Max(player2.elo - 5, 0);
+                }
+                else if (winner == player2.username)
+                {
+                    player2.wins++;
+                    player1.losses++;
+                    player2.elo += 3;
+                    player1.elo = Math.Max(player1.elo - 5, 0);
+                }
+
+                // Update players in the database
+                await userService.UpdateUserAsync(player1);
+                await userService.UpdateUserAsync(player2);
+
+                // Prepare and send response back with battle log
+                var response = new
+                {
+                    message = "Battle completed",
+                    log = log
+                };
+
+                string jsonResponse = JsonConvert.SerializeObject(response);
+                await SendResponse(writer, 200, jsonResponse);
             }
             else
             {
-                return "It's a draw!";
+                // If only one player is available, enqueue the player again and inform them they are waiting
+                lock (battleQueueLock)
+                {
+                    if (battleQueue.Count >= 2)
+                    {
+                        battleQueue.TryDequeue(out player1);
+                        battleQueue.TryDequeue(out player2);
+                    }
+                    else
+                    {
+                        // If not enough players, re-enqueue the current player and exit
+                        battleQueue.Enqueue(currentPlayer);
+                        return;
+                    }
+                }
+                await SendResponse(writer, 200, "{\"message\": \"Waiting for an opponent...\"}");
             }
+        }
+        private async Task<(List<string> log, string winner)> SimulateBattle(User player1, User player2, List<string> battleLog)
+        {
+            // Simulate the battle logic here and populate battleLog
+            string winner = "player1";  // Example of the winner determination logic
+            return (battleLog, winner);
         }
 
         public async Task HandleScoreBoard(StreamWriter writer)
@@ -500,6 +585,7 @@ namespace SWE.Models
 
         public async Task HandleDeckUpdate(string authToken, string body, StreamWriter writer)
         {
+
             // Strip "Bearer " from token
             string inputToken = authToken.Replace("Bearer ", "").Trim();
 
@@ -578,7 +664,7 @@ namespace SWE.Models
             }
 
             // Fetch the updated deck and send it as a formatted response
-            var getDeckQuery = "SELECT c.name, c.damage FROM cards c JOIN user_deck ud ON c.id = ud.card_id WHERE ud.user_id = @userId";
+            var getDeckQuery = "SELECT c.id, c.name, c.damage FROM cards c JOIN user_deck ud ON c.id = ud.card_id WHERE ud.user_id = @userId";
             var userDeck = new List<Card>();
 
             using (var command = new NpgsqlCommand(getDeckQuery, connection))
@@ -590,8 +676,11 @@ namespace SWE.Models
                     {
                         userDeck.Add(new Card(connection)
                         {
-                            name = reader.GetString(0),
-                            damage = reader.GetInt32(1)
+                            id = reader.GetGuid(reader.GetOrdinal("id")),
+                            name = reader.GetString(reader.GetOrdinal("name")),
+                            damage = reader.GetDouble(reader.GetOrdinal("damage")),
+                            Type = Card.GetCardType(reader.GetString(reader.GetOrdinal("name"))),
+                            Element = Card.GetElementalType(reader.GetString(reader.GetOrdinal("name")))
                         });
                     }
                 }
@@ -607,14 +696,12 @@ namespace SWE.Models
             StringBuilder responseBuilder = new StringBuilder();
             foreach (var card in userDeck)
             {
-                responseBuilder.AppendLine($"Name: {card.name} Damage: {card.damage}");
+                responseBuilder.AppendLine($"Name: {card.name} Damage: {card.damage} Type: {card.Type} Element: {card.Element}");
             }
 
             // Send the response with the formatted deck
             await SendResponse(writer, 200, responseBuilder.ToString());
         }
-
-
 
         public async Task HandleListPlayingDeck(string authToken, StreamWriter writer)
         {
@@ -624,7 +711,6 @@ namespace SWE.Models
                 await SendResponse(writer, 401, "Unauthorized");
                 return;
             }
-
             // Remove the "Bearer " prefix if present
             string inputToken = authToken.Replace("Bearer ", "").Trim();
 
@@ -643,10 +729,10 @@ namespace SWE.Models
             await connection.OpenAsync();
 
             const string getUserDeckQuery = @"
-    SELECT c.id, c.name, c.damage
-    FROM cards c
-    INNER JOIN user_deck ud ON c.id = ud.card_id
-    WHERE ud.user_id = @userId";
+SELECT c.id, c.name, c.damage
+FROM cards c
+INNER JOIN user_deck ud ON c.id = ud.card_id
+WHERE ud.user_id = @userId";
 
             List<Card> userDeck = new List<Card>();
 
@@ -661,7 +747,9 @@ namespace SWE.Models
                         {
                             id = reader.GetGuid(reader.GetOrdinal("id")),
                             name = reader.GetString(reader.GetOrdinal("name")),
-                            damage = reader.GetDouble(reader.GetOrdinal("damage"))
+                            damage = reader.GetDouble(reader.GetOrdinal("damage")),
+                            Type = Card.GetCardType(reader.GetString(reader.GetOrdinal("name"))),
+                            Element = Card.GetElementalType(reader.GetString(reader.GetOrdinal("name")))
                         });
                     }
                 }
@@ -684,6 +772,8 @@ namespace SWE.Models
                     // Append the card details in the format "Name: <card_name>\nDamage: <card_damage>"
                     responseBuilder.AppendLine($"Name: {card.name}");
                     responseBuilder.AppendLine($"Damage: {card.damage}");
+                    responseBuilder.AppendLine($"Type: {card.Type}");
+                    responseBuilder.AppendLine($"Element: {card.Element}");
                     responseBuilder.AppendLine();  // Add an empty line between each card
                 }
 
@@ -691,7 +781,6 @@ namespace SWE.Models
                 string response = responseBuilder.ToString();
                 await SendResponse(writer, 200, response);
             }
-
         }
 
 
@@ -747,8 +836,9 @@ JOIN cards c ON c.package_id = p.package_id
 WHERE c.user_id IS NULL
 GROUP BY p.package_id
 HAVING COUNT(c.id) = 5
-ORDER BY RANDOM()
+ORDER BY p.package_id
 LIMIT 1";
+
 
 
             Guid? packageId = null;
@@ -993,14 +1083,18 @@ LIMIT 1";
 
         private async Task SendResponse(StreamWriter writer, int statusCode, string message)
         {
-            await writer.WriteLineAsync($"HTTP/1.1 {statusCode} OK");
-            await writer.WriteLineAsync($"Content-Type: application/json");
-            await writer.WriteLineAsync($"Content-Length: {message.Length}");
-            await writer.WriteLineAsync();
-            await writer.WriteLineAsync(message);
-            await writer.FlushAsync();  // Ensure flush is done
+            // Construct the full response
+            string response = $"HTTP/1.1 {statusCode} OK\r\n";
+            response += $"Content-Type: application/json\r\n";
+            response += $"Content-Length: {message.Length}\r\n"; // Length of the actual message
+            response += "\r\n"; // End of headers
+            response += message; // The actual message content
 
+            // Write the full response
+            await writer.WriteAsync(response);
+            await writer.FlushAsync();  // Ensure the response is fully flushed
         }
+
     }
 
     public class UserLoginRequest

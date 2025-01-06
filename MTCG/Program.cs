@@ -22,10 +22,8 @@ public class Program
         var host = CreateHostBuilder(args).Build();
         var server = host.Services.GetRequiredService<TcpServer>();
 
-        // Start the server with the desired host and port
         server.Start("localhost", 10001);
 
-        // The server should run indefinitely, so we won't finish Main until it's done.
         await host.RunAsync();
     }
 
@@ -33,13 +31,10 @@ public class Program
     Host.CreateDefaultBuilder(args)
         .ConfigureServices((hostContext, services) =>
         {
-            // Register the connection string for dependency injection
             string connectionString = $"Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432";
 
-            // Register NpgsqlConnection as a singleton
             services.AddSingleton<NpgsqlConnection>(_ => new NpgsqlConnection(connectionString));
 
-            // Register services and classes
             services.AddSingleton<TcpServer>();
             services.AddSingleton<Router>();
             services.AddSingleton<UserService>(provider =>
@@ -50,7 +45,7 @@ public class Program
             }); services.AddSingleton<Database>();
             services.AddSingleton<CardService>();
             services.AddSingleton<Package>();
-            services.AddTransient<Card>(); // Use transient if you're instantiating per usage
+            services.AddTransient<Card>();
         });
 
 }
