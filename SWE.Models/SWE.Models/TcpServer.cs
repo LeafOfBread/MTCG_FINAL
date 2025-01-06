@@ -221,10 +221,20 @@ namespace SWE.Models
                     {
                         string authToken = authHeader.Replace("Bearer ", "").Trim();  // Remove "Bearer " part
                         string usernameFromToken = authToken.Replace("-mtcgToken", "").Trim();
+                        Console.WriteLine("user token: " + usernameFromToken);
                         bool justProfile = false;
                         string username = "";
                         // Proceed to handle the user stats request
-                        await HandleGetUser(username, authToken, writer, justProfile);
+                        await HandleGetUser(usernameFromToken, authToken, writer, justProfile);
+                    }
+
+                    else if (path == "/scoreboard" && method == "GET")
+                    {
+                        await HandleScoreBoard(writer);
+                    }
+                    else if (path == "/battles" && method == "POST")
+                    {
+                        await HandleBattle(writer);
                     }
 
                     else
@@ -238,6 +248,104 @@ namespace SWE.Models
                 Console.WriteLine($"Error handling client: {ex.Message}");
             }
         }
+
+
+        private async Task HandleBattle(StreamWriter writer)
+        {
+            // You will need a queue to store players who want to battle
+            var battleQueue = new Queue<User>();
+
+            if (battleQueue.Count < 2)
+            {
+                await SendResponse(writer, 400, "Not enough players to start a battle");
+                return;
+            }
+
+            // Get the first two players in the queue
+            var player1 = battleQueue.Dequeue();
+            var player2 = battleQueue.Dequeue();
+
+            // Simulate the battle logic (you can replace this with your actual battle logic)
+            var battleResult = await SimulateBattle(player1, player2);
+
+            // Send the battle result back to both players
+            StringBuilder responseBuilder = new StringBuilder();
+            responseBuilder.AppendLine($"Battle Result: {battleResult}");
+            await SendResponse(writer, 200, responseBuilder.ToString());
+        }
+        private async Task<string> SimulateBattle(User player1, User player2)
+        {
+            // Simulate a simple battle where player with the higher ELO wins
+            if (player1.elo > player2.elo)
+            {
+                return $"{player1.username} wins!";
+            }
+            else if (player2.elo > player1.elo)
+            {
+                return $"{player2.username} wins!";
+            }
+            else
+            {
+                return "It's a draw!";
+            }
+        }
+
+        public async Task HandleScoreBoard(StreamWriter writer)
+        {
+            try
+            {
+                // Establish the connection to the database
+                var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
+                await connection.OpenAsync();
+
+                // Query to fetch all players, ordered by ELO in descending order
+                string getScoreboardQuery = @"
+        SELECT username, elo FROM users ORDER BY elo DESC";
+
+                List<User> players = new List<User>();
+
+                // Fetch data from the database
+                using (var command = new NpgsqlCommand(getScoreboardQuery, connection))
+                using (var reader = await command.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        players.Add(new User
+                        {
+                            username = reader.GetString(0),
+                            elo = reader.GetInt32(1)
+                        });
+                    }
+                }
+
+                // If no players found, send a 404 response
+                if (players.Count == 0)
+                {
+                    await SendResponse(writer, 404, "No players found");
+                    return;
+                }
+
+                // Prepare the response with the leaderboard
+                StringBuilder responseBuilder = new StringBuilder();
+                responseBuilder.AppendLine("Scoreboard:");
+
+                foreach (var player in players)
+                {
+                    responseBuilder.AppendLine($"{player.username} - ELO: {player.elo}");
+                }
+
+                // Send the response with the scoreboard
+                await SendResponse(writer, 200, responseBuilder.ToString());
+            }
+            catch (Exception ex)
+            {
+                // Log any errors that occur during the database operation or response sending
+                await SendResponse(writer, 500, $"Internal Server Error: {ex.Message}");
+                Console.WriteLine($"Error in HandleScoreBoard: {ex.Message}");
+            }
+        }
+
+
         public async Task HandleEditProfile(string username, string authToken, StreamWriter writer, string requestBody)
         {
             // Extract the token (remove "Bearer " prefix) from the Authorization header
@@ -314,10 +422,14 @@ namespace SWE.Models
                 return;
             }
 
+
             // Verify user based on authToken
+            string usernameWithToken = username + "-mtcgToken";
+            Console.WriteLine("usernameWithToken " + usernameWithToken);
             var userService = _serviceProvider.GetRequiredService<UserService>();
-            //string userToken = username + "-mtcg"
-            int? userId = await userService.GetUserIdByTokenAsync(username +"-mtcgToken");
+            int? userId = await userService.GetUserIdByTokenAsync(usernameWithToken);
+
+            
 
             if (userId == null)
             {
@@ -326,12 +438,14 @@ namespace SWE.Models
             }
             Console.WriteLine("User ID: " + userId);
 
-            // Retrieve the user's data from the database
+            // Set the query and fields based on `justProfile` flag
             var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
             await connection.OpenAsync();
 
-            // Query user data
-            var getUserQuery = "SELECT username, bio, image FROM users WHERE id = @userId";
+            string getUserQuery = justProfile
+                ? "SELECT username, bio, image FROM users WHERE id = @userId"
+                : "SELECT username, bio, image, elo, coins, wins, losses FROM users WHERE id = @userId";
+
             User user = null;
 
             using (var command = new NpgsqlCommand(getUserQuery, connection))
@@ -345,8 +459,16 @@ namespace SWE.Models
                         {
                             username = reader.GetString(0),
                             bio = reader.IsDBNull(1) ? null : reader.GetString(1),  // Handle nullable bio
-                            image = reader.IsDBNull(2) ? null : reader.GetString(2)
+                            image = reader.IsDBNull(2) ? null : reader.GetString(2)  // Handle nullable image
                         };
+
+                        if (!justProfile)
+                        {
+                            user.elo = reader.GetInt32(3);    // ELO
+                            user.coins = reader.GetInt32(4);  // Coins
+                            user.wins = reader.GetInt32(5);   // Wins
+                            user.losses = reader.GetInt32(6); // Losses
+                        }
                     }
                 }
             }
@@ -356,21 +478,25 @@ namespace SWE.Models
                 await SendResponse(writer, 404, "User not found");
                 return;
             }
-
-            // Format and send the user data as the response
             StringBuilder responseBuilder = new StringBuilder();
-            responseBuilder.AppendLine($"Username: {user.username}");
-            responseBuilder.AppendLine($"Bio: {user.bio}");
-            responseBuilder.AppendLine($"Image: {user.image}");
-            responseBuilder.AppendLine($"ELO: {user.elo}");
-            responseBuilder.AppendLine($"Coins: {user.coins}");
-            responseBuilder.AppendLine($"Wins: {user.wins}");
-            responseBuilder.AppendLine($"Losses: {user.losses}");
+
+            if (justProfile)
+            {
+                responseBuilder.AppendLine($"Username: {user.username}");
+                responseBuilder.AppendLine($"Bio: {user.bio}");
+                responseBuilder.AppendLine($"Image: {user.image}");
+            }
+
+            else if (!justProfile)
+            {
+                responseBuilder.AppendLine($"ELO: {user.elo}");
+                responseBuilder.AppendLine($"Coins: {user.coins}");
+                responseBuilder.AppendLine($"Wins: {user.wins}");
+                responseBuilder.AppendLine($"Losses: {user.losses}");
+            }
 
             await SendResponse(writer, 200, responseBuilder.ToString());
         }
-
-
 
         public async Task HandleDeckUpdate(string authToken, string body, StreamWriter writer)
         {
