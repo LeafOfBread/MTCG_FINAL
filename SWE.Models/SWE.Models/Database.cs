@@ -148,7 +148,7 @@ namespace SWE.Models
                             id = reader.GetGuid(reader.GetOrdinal("id")), // Get Id as a string
                             name = reader.GetString(reader.GetOrdinal("name")),
                             damage = reader.GetDouble(reader.GetOrdinal("damage")), // Get Damage as a double
-                            
+
                         });
                     }
                 }
@@ -160,7 +160,7 @@ namespace SWE.Models
     }
 
     // Example of entities used
-    
 
-    
+
+
 }

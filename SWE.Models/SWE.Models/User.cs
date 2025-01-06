@@ -26,4 +26,3 @@ namespace SWE.Models
         public string? bio { get; set; }
     }
 }
-

@@ -182,7 +182,7 @@ namespace SWE.Models
                         Console.WriteLine("authHeader: " + authHeader);
                         await HandleCardListing(authHeader, writer);
                     }
-                    else if(path == "/deck" && method == "GET")
+                    else if (path == "/deck" && method == "GET")
                     {
                         await HandleListPlayingDeck(authHeader, writer);
                     }
@@ -201,9 +201,11 @@ namespace SWE.Models
                 Console.WriteLine($"Error handling client: {ex.Message}");
             }
         }
+
+
         public async Task HandleDeckUpdate(string authToken, string body, StreamWriter writer)
         {
-            // Remove the "Bearer " prefix if present
+            // Strip "Bearer " from token
             string inputToken = authToken.Replace("Bearer ", "").Trim();
 
             if (string.IsNullOrEmpty(inputToken))
@@ -222,7 +224,7 @@ namespace SWE.Models
                 return;
             }
 
-            // Parse the body into a list of card IDs (Guid format)
+            // Parse the body into a list of card IDs (UUIDs)
             List<Guid> cardIds = JsonConvert.DeserializeObject<List<Guid>>(body);
 
             // Ensure exactly 4 cards are provided
@@ -240,7 +242,7 @@ namespace SWE.Models
             // Ensure that all provided cards belong to the user
             foreach (var cardGuid in cardIds)
             {
-                var checkCardQuery = "SELECT 1 FROM cards WHERE id = @cardId AND user_id = @userId";
+                var checkCardQuery = "SELECT 1 FROM cards c JOIN users u ON c.user_id = u.id WHERE c.id = @cardId AND c.user_id = @userId";
                 using (var command = new NpgsqlCommand(checkCardQuery, connection))
                 {
                     command.Parameters.AddWithValue("@cardId", cardGuid);
@@ -253,13 +255,10 @@ namespace SWE.Models
                 }
             }
 
-            // Log valid card IDs for debugging
-            Console.WriteLine("Valid Card IDs: " + string.Join(", ", validCardIds));
-
-            // Ensure that exactly 4 valid cards were found
+            // If fewer than 4 valid cards, return a 400 error
             if (validCardIds.Count != 4)
             {
-                await SendResponse(writer, 400, "One or more cards do not belong to the user.");
+                await SendResponse(writer, 400, "One or more cards do not belong to the user or the number of valid cards is incorrect.");
                 return;
             }
 
@@ -283,10 +282,42 @@ namespace SWE.Models
                 }
             }
 
-            // Respond with a success message
-            await SendResponse(writer, 200, "Deck updated successfully");
-        }
+            // Fetch the updated deck and send it as a formatted response
+            var getDeckQuery = "SELECT c.name, c.damage FROM cards c JOIN user_deck ud ON c.id = ud.card_id WHERE ud.user_id = @userId";
+            var userDeck = new List<Card>();
 
+            using (var command = new NpgsqlCommand(getDeckQuery, connection))
+            {
+                command.Parameters.AddWithValue("@userId", userId.Value);
+                using (var reader = await command.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        userDeck.Add(new Card(connection)
+                        {
+                            name = reader.GetString(0),
+                            damage = reader.GetInt32(1)
+                        });
+                    }
+                }
+            }
+
+            // Pad the response with placeholders if the deck has fewer than 4 cards
+            while (userDeck.Count < 4)
+            {
+                userDeck.Add(new Card(connection) { name = "InvalidCard", damage = 0 });
+            }
+
+            // Build the response with a user-friendly format: "Name: ___ Damage: ___"
+            StringBuilder responseBuilder = new StringBuilder();
+            foreach (var card in userDeck)
+            {
+                responseBuilder.AppendLine($"Name: {card.name} Damage: {card.damage}");
+            }
+
+            // Send the response with the formatted deck
+            await SendResponse(writer, 200, responseBuilder.ToString());
+        }
 
 
 
@@ -350,10 +381,22 @@ namespace SWE.Models
             }
             else
             {
-                // Respond with the user's deck in JSON format
-                string response = JsonConvert.SerializeObject(userDeck);
+                // Build the response in the required format
+                StringBuilder responseBuilder = new StringBuilder();
+
+                foreach (var card in userDeck)
+                {
+                    // Append the card details in the format "Name: <card_name>\nDamage: <card_damage>"
+                    responseBuilder.AppendLine($"Name: {card.name}");
+                    responseBuilder.AppendLine($"Damage: {card.damage}");
+                    responseBuilder.AppendLine();  // Add an empty line between each card
+                }
+
+                // Convert the StringBuilder to string and send the response
+                string response = responseBuilder.ToString();
                 await SendResponse(writer, 200, response);
             }
+
         }
 
 
