@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.11.35222.181
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SWE.Models", "SWE.Models\SWE.Models.csproj", "{A77A5C9D-9C3F-41A2-9CE9-B61EA14FB41B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A77A5C9D-9C3F-41A2-9CE9-B61EA14FB41B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A77A5C9D-9C3F-41A2-9CE9-B61EA14FB41B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A77A5C9D-9C3F-41A2-9CE9-B61EA14FB41B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A77A5C9D-9C3F-41A2-9CE9-B61EA14FB41B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {5A3A4D78-A4DC-4516-A4E7-20196D4EDCD9}
+	EndGlobalSection
+EndGlobal
