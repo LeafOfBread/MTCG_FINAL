@@ -119,6 +119,7 @@ namespace SWE.Models
                     string authHeader = null;
                     string line;
                     bool headersEnd = false; // Flag to detect end of headers
+                    string requestBody = null; // Declare requestBody here to make it accessible throughout the method
 
                     while (!headersEnd && !string.IsNullOrEmpty(line = await reader.ReadLineAsync()))
                     {
@@ -147,31 +148,29 @@ namespace SWE.Models
                     string path = requestParts[1].Trim();
 
                     // Handle body
-                    char[] buffer = new char[contentLength];
                     if (contentLength > 0)
                     {
+                        char[] buffer = new char[contentLength];
                         await reader.ReadAsync(buffer, 0, contentLength);
+                        requestBody = new string(buffer); // Assign the request body here
                     }
-                    string body = new string(buffer);
 
-                    Console.WriteLine($"Request Body: {body}");
+                    Console.WriteLine($"Request Body: {requestBody}");
 
                     // Check if the path is correctly matched to "/users" or "/sessions"
                     if (path == "/sessions" && method == "POST")
                     {
-                        await HandleLogin(body, new Dictionary<string, string>(), writer);
+                        await HandleLogin(requestBody, new Dictionary<string, string>(), writer);
                     }
                     else if (path == "/users" && method == "POST")
                     {
-                        await HandleRegisterUser(body, new Dictionary<string, string>(), writer);
+                        await HandleRegisterUser(requestBody, new Dictionary<string, string>(), writer);
                     }
                     else if (path == "/packages" && method == "POST")
                     {
-                        List<Dictionary<string, object>> parsedBody = JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(body);
+                        List<Dictionary<string, object>> parsedBody = JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(requestBody);
                         await HandlePackages(parsedBody, authHeader, stream);
                     }
-
-
                     else if (path.StartsWith("/transactions/packages") && method == "POST")
                     {
                         Console.WriteLine("authHeader: " + authHeader);
@@ -188,8 +187,46 @@ namespace SWE.Models
                     }
                     else if (path == "/deck" && method == "PUT")
                     {
-                        await HandleDeckUpdate(authHeader, body, writer);
+                        await HandleDeckUpdate(authHeader, requestBody, writer);
                     }
+                    else if (path.StartsWith("/users/") && method == "GET")
+                    {
+                        string username = path.Substring(7); // Extract the username (e.g., /users/kienboec => "kienboec")
+                        string authToken = authHeader.Replace("Bearer ", "").Trim();  // Remove "Bearer " part
+                        string usernameFromToken = authToken.Replace("-mtcgToken", "").Trim();
+                        bool justProfile = true;
+                        if (username != usernameFromToken)
+                        {
+                            await SendResponse(writer, 403, "Forbidden: Token does not match the requested user");
+                            return;
+                        }
+                        // Proceed to handle the user data request
+                        await HandleGetUser(username, authToken, writer, justProfile);
+                    }
+                    else if (path.StartsWith("/users/") && method == "PUT")
+                    {
+                        string username = path.Substring(7); // Extract the username (e.g., /users/kienboec => "kienboec")
+                        string authToken = authHeader.Replace("Bearer ", "").Trim();  // Remove "Bearer " part
+                        string usernameFromToken = authToken.Replace("-mtcgToken", "").Trim();
+                        if (username != usernameFromToken)
+                        {
+                            await SendResponse(writer, 403, "Forbidden: Token does not match the requested user");
+                            return;
+                        }
+
+                        // Proceed to handle the user data request
+                        await HandleEditProfile(username, authToken, writer, requestBody);
+                    }
+                    else if (path == "/stats" && method == "GET")
+                    {
+                        string authToken = authHeader.Replace("Bearer ", "").Trim();  // Remove "Bearer " part
+                        string usernameFromToken = authToken.Replace("-mtcgToken", "").Trim();
+                        bool justProfile = false;
+                        string username = "";
+                        // Proceed to handle the user stats request
+                        await HandleGetUser(username, authToken, writer, justProfile);
+                    }
+
                     else
                     {
                         await SendResponse(writer, 404, "Not Found");
@@ -201,6 +238,138 @@ namespace SWE.Models
                 Console.WriteLine($"Error handling client: {ex.Message}");
             }
         }
+        public async Task HandleEditProfile(string username, string authToken, StreamWriter writer, string requestBody)
+        {
+            // Extract the token (remove "Bearer " prefix) from the Authorization header
+            string inputToken = authToken.Replace("Bearer ", "").Trim();
+            Console.WriteLine("Username: " + username);
+            Console.WriteLine("Auth Token: " + inputToken);
+
+            if (string.IsNullOrEmpty(inputToken))
+            {
+                await SendResponse(writer, 401, "Unauthorized");
+                return;
+            }
+
+            // Verify user based on authToken
+            var userService = _serviceProvider.GetRequiredService<UserService>();
+            int? userId = await userService.GetUserIdByTokenAsync(username + "-mtcgToken");
+
+            if (userId == null)
+            {
+                await SendResponse(writer, 401, "Unauthorized");
+                return;
+            }
+            Console.WriteLine("User ID: " + userId);
+
+            // Deserialize the request body
+            UserProfileUpdateRequest updateRequest = JsonConvert.DeserializeObject<UserProfileUpdateRequest>(requestBody);
+
+            // Validate the update request (optional but recommended)
+            if (updateRequest == null || string.IsNullOrEmpty(updateRequest.Name))
+            {
+                await SendResponse(writer, 400, "Bad Request: Invalid input");
+                return;
+            }
+
+            // Update the user's profile in the database
+            var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
+            await connection.OpenAsync();
+
+            string updateUserQuery = @"
+        UPDATE users 
+        SET username = @Name, bio = @Bio, image = @Image 
+        WHERE id = @userId";
+
+            using (var command = new NpgsqlCommand(updateUserQuery, connection))
+            {
+                command.Parameters.AddWithValue("@Name", updateRequest.Name);
+                command.Parameters.AddWithValue("@Bio", updateRequest.Bio ?? (object)DBNull.Value);  // Handle nullable fields
+                command.Parameters.AddWithValue("@Image", updateRequest.Image ?? (object)DBNull.Value); // Handle nullable fields
+                command.Parameters.AddWithValue("@userId", userId.Value);
+
+                int rowsAffected = await command.ExecuteNonQueryAsync();
+
+                if (rowsAffected > 0)
+                {
+                    // Successfully updated user profile
+                    await SendResponse(writer, 200, "Profile updated successfully");
+                }
+                else
+                {
+                    // Something went wrong or user profile not found
+                    await SendResponse(writer, 404, "User not found");
+                }
+            }
+        }
+
+        public async Task HandleGetUser(string username, string authToken, StreamWriter writer, bool justProfile)
+        {
+            string inputToken = authToken.Replace("Bearer ", "").Trim();
+            Console.WriteLine("username " + username);
+
+            if (string.IsNullOrEmpty(inputToken))
+            {
+                await SendResponse(writer, 401, "Unauthorized");
+                return;
+            }
+
+            // Verify user based on authToken
+            var userService = _serviceProvider.GetRequiredService<UserService>();
+            //string userToken = username + "-mtcg"
+            int? userId = await userService.GetUserIdByTokenAsync(username +"-mtcgToken");
+
+            if (userId == null)
+            {
+                await SendResponse(writer, 401, "Unauthorized");
+                return;
+            }
+            Console.WriteLine("User ID: " + userId);
+
+            // Retrieve the user's data from the database
+            var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
+            await connection.OpenAsync();
+
+            // Query user data
+            var getUserQuery = "SELECT username, bio, image FROM users WHERE id = @userId";
+            User user = null;
+
+            using (var command = new NpgsqlCommand(getUserQuery, connection))
+            {
+                command.Parameters.AddWithValue("@userId", userId.Value);
+                using (var reader = await command.ExecuteReaderAsync())
+                {
+                    if (await reader.ReadAsync())
+                    {
+                        user = new User
+                        {
+                            username = reader.GetString(0),
+                            bio = reader.IsDBNull(1) ? null : reader.GetString(1),  // Handle nullable bio
+                            image = reader.IsDBNull(2) ? null : reader.GetString(2)
+                        };
+                    }
+                }
+            }
+
+            if (user == null)
+            {
+                await SendResponse(writer, 404, "User not found");
+                return;
+            }
+
+            // Format and send the user data as the response
+            StringBuilder responseBuilder = new StringBuilder();
+            responseBuilder.AppendLine($"Username: {user.username}");
+            responseBuilder.AppendLine($"Bio: {user.bio}");
+            responseBuilder.AppendLine($"Image: {user.image}");
+            responseBuilder.AppendLine($"ELO: {user.elo}");
+            responseBuilder.AppendLine($"Coins: {user.coins}");
+            responseBuilder.AppendLine($"Wins: {user.wins}");
+            responseBuilder.AppendLine($"Losses: {user.losses}");
+
+            await SendResponse(writer, 200, responseBuilder.ToString());
+        }
+
 
 
         public async Task HandleDeckUpdate(string authToken, string body, StreamWriter writer)
@@ -712,5 +881,11 @@ LIMIT 1";
     {
         public string username { get; set; }
         public string password { get; set; }
+    }
+    public class UserProfileUpdateRequest
+    {
+        public string Name { get; set; }
+        public string Bio { get; set; }
+        public string Image { get; set; }
     }
 }
