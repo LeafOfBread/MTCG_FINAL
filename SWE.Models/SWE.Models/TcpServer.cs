@@ -177,7 +177,19 @@ namespace SWE.Models
                         Console.WriteLine("authHeader: " + authHeader);
                         await HandleAcquirePackages(authHeader, stream);
                     }
-
+                    else if (path == "/cards" && method == "GET")
+                    {
+                        Console.WriteLine("authHeader: " + authHeader);
+                        await HandleCardListing(authHeader, writer);
+                    }
+                    else if(path == "/deck" && method == "GET")
+                    {
+                        await HandleListPlayingDeck(authHeader, writer);
+                    }
+                    else if (path == "/deck" && method == "PUT")
+                    {
+                        await HandleDeckUpdate(authHeader, body, writer);
+                    }
                     else
                     {
                         await SendResponse(writer, 404, "Not Found");
@@ -189,6 +201,161 @@ namespace SWE.Models
                 Console.WriteLine($"Error handling client: {ex.Message}");
             }
         }
+        public async Task HandleDeckUpdate(string authToken, string body, StreamWriter writer)
+        {
+            // Remove the "Bearer " prefix if present
+            string inputToken = authToken.Replace("Bearer ", "").Trim();
+
+            if (string.IsNullOrEmpty(inputToken))
+            {
+                await SendResponse(writer, 401, "Unauthorized");
+                return;
+            }
+
+            // Verify user based on authToken
+            var userService = _serviceProvider.GetRequiredService<UserService>();
+            int? userId = await userService.GetUserIdByTokenAsync(inputToken);
+
+            if (userId == null)
+            {
+                await SendResponse(writer, 401, "Unauthorized");
+                return;
+            }
+
+            // Parse the body into a list of card IDs (Guid format)
+            List<Guid> cardIds = JsonConvert.DeserializeObject<List<Guid>>(body);
+
+            // Ensure exactly 4 cards are provided
+            if (cardIds.Count != 4)
+            {
+                await SendResponse(writer, 400, "Invalid number of cards. You must provide exactly 4 cards.");
+                return;
+            }
+
+            var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
+            await connection.OpenAsync();
+
+            var validCardIds = new List<Guid>();
+
+            // Ensure that all provided cards belong to the user
+            foreach (var cardGuid in cardIds)
+            {
+                var checkCardQuery = "SELECT 1 FROM cards WHERE id = @cardId AND user_id = @userId";
+                using (var command = new NpgsqlCommand(checkCardQuery, connection))
+                {
+                    command.Parameters.AddWithValue("@cardId", cardGuid);
+                    command.Parameters.AddWithValue("@userId", userId.Value);
+                    var result = await command.ExecuteScalarAsync();
+                    if (result != null)
+                    {
+                        validCardIds.Add(cardGuid);
+                    }
+                }
+            }
+
+            // Log valid card IDs for debugging
+            Console.WriteLine("Valid Card IDs: " + string.Join(", ", validCardIds));
+
+            // Ensure that exactly 4 valid cards were found
+            if (validCardIds.Count != 4)
+            {
+                await SendResponse(writer, 400, "One or more cards do not belong to the user.");
+                return;
+            }
+
+            // Clear the user's current deck
+            var clearDeckQuery = "DELETE FROM user_deck WHERE user_id = @userId";
+            using (var command = new NpgsqlCommand(clearDeckQuery, connection))
+            {
+                command.Parameters.AddWithValue("@userId", userId.Value);
+                await command.ExecuteNonQueryAsync();
+            }
+
+            // Insert the new cards into the user's deck
+            foreach (var cardId in validCardIds)
+            {
+                var insertDeckQuery = "INSERT INTO user_deck (user_id, card_id) VALUES (@userId, @cardId)";
+                using (var command = new NpgsqlCommand(insertDeckQuery, connection))
+                {
+                    command.Parameters.AddWithValue("@userId", userId.Value);
+                    command.Parameters.AddWithValue("@cardId", cardId);
+                    await command.ExecuteNonQueryAsync();
+                }
+            }
+
+            // Respond with a success message
+            await SendResponse(writer, 200, "Deck updated successfully");
+        }
+
+
+
+
+        public async Task HandleListPlayingDeck(string authToken, StreamWriter writer)
+        {
+            Console.WriteLine("authToken debug " + authToken);
+            if (string.IsNullOrEmpty(authToken))
+            {
+                await SendResponse(writer, 401, "Unauthorized");
+                return;
+            }
+
+            // Remove the "Bearer " prefix if present
+            string inputToken = authToken.Replace("Bearer ", "").Trim();
+
+            // Verify user based on authToken
+            var userService = _serviceProvider.GetRequiredService<UserService>();
+            int userId = await userService.GetUserIdByTokenAsync(inputToken);
+
+            if (userId == null)
+            {
+                await SendResponse(writer, 401, "Unauthorized");
+                return;
+            }
+
+            // Fetch the user's playing deck from the database
+            var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
+            await connection.OpenAsync();
+
+            const string getUserDeckQuery = @"
+    SELECT c.id, c.name, c.damage
+    FROM cards c
+    INNER JOIN user_deck ud ON c.id = ud.card_id
+    WHERE ud.user_id = @userId";
+
+            List<Card> userDeck = new List<Card>();
+
+            using (var command = new NpgsqlCommand(getUserDeckQuery, connection))
+            {
+                command.Parameters.AddWithValue("@userId", userId);
+                using (var reader = await command.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        userDeck.Add(new Card(connection)
+                        {
+                            id = reader.GetGuid(reader.GetOrdinal("id")),
+                            name = reader.GetString(reader.GetOrdinal("name")),
+                            damage = reader.GetDouble(reader.GetOrdinal("damage"))
+                        });
+                    }
+                }
+            }
+
+            // Check if the deck is empty
+            if (userDeck.Count == 0)
+            {
+                // Return a 200 OK response with an empty list
+                string response = JsonConvert.SerializeObject(new List<Card>());
+                await SendResponse(writer, 200, response);
+            }
+            else
+            {
+                // Respond with the user's deck in JSON format
+                string response = JsonConvert.SerializeObject(userDeck);
+                await SendResponse(writer, 200, response);
+            }
+        }
+
 
         public async Task<int> HandleAcquirePackages(string authToken, NetworkStream stream)
         {
@@ -321,7 +488,69 @@ LIMIT 1";
             return 0;
         }
 
+        public async Task HandleCardListing(string authToken, StreamWriter writer)
+        {
+            Console.WriteLine("authToken debug " + authToken);
+            if (string.IsNullOrEmpty(authToken))
+            {
+                await SendResponse(writer, 401, "Unauthorized");
+                return;
+            }
+            // Remove the "Bearer " prefix if present
+            string inputToken = authToken.Replace("Bearer ", "").Trim();
 
+            // Verify user based on authToken
+            var userService = _serviceProvider.GetRequiredService<UserService>();
+            int userId = await userService.GetUserIdByTokenAsync(inputToken);
+
+            if (userId == null)
+            {
+                await SendResponse(writer, 401, "Unauthorized");
+                return;
+            }
+
+            // Fetch the user's cards from the database
+            var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
+            await connection.OpenAsync();
+
+            const string getUserCardsQuery = @"
+    SELECT id, name, damage
+    FROM cards
+    WHERE user_id = @userId";
+
+            List<Card> userCards = new List<Card>();
+
+            using (var command = new NpgsqlCommand(getUserCardsQuery, connection))
+            {
+                command.Parameters.AddWithValue("@userId", userId);
+                using (var reader = await command.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        userCards.Add(new Card(connection)
+                        {
+                            id = reader.GetGuid(reader.GetOrdinal("id")),
+                            name = reader.GetString(reader.GetOrdinal("name")),
+                            damage = reader.GetDouble(reader.GetOrdinal("damage"))
+                        });
+                    }
+                }
+            }
+
+            // Check if the list of cards is empty
+            if (userCards.Count == 0)
+            {
+                // Return a 200 OK response with an empty list
+                string response = JsonConvert.SerializeObject(new List<Card>());
+                await SendResponse(writer, 200, response);
+            }
+            else
+            {
+                // Respond with the user's cards in JSON format
+                string response = JsonConvert.SerializeObject(userCards);
+                await SendResponse(writer, 200, response);
+            }
+        }
 
 
         public async Task<int> HandlePackages(List<Dictionary<string, object>> receive, string Auth, NetworkStream stream)
