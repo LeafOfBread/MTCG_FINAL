@@ -74,7 +74,7 @@ namespace SWE.Models
 
         public async Task<int> CreatePackageInDatabaseAsync(string connectionString)
         {
-            /*const string insertPackageQuery = "INSERT INTO public.packages (name, damage) VALUES (@name, @damage) RETURNING id";
+            const string insertPackageQuery = "INSERT INTO public.packages (name, damage) VALUES (@name, @damage) RETURNING id";
 
             try
             {
@@ -103,78 +103,9 @@ namespace SWE.Models
             {
                 Console.WriteLine($"Error creating package: {ex.Message}");
                 return 0; // Return 0 if an exception occurs
-            }*/
+            }
             return 0;
         }
-
-
-        public async Task<(Package, int)> CreatePackageAsync(string auth, List<Dictionary<string, object>> body, string connectionString)
-        {
-            string inputToken = auth.Replace("Bearer ", "").Trim();
-
-            if (inputToken == "admin-mtcgToken")
-            {
-                // Check if the number of cards is correct
-                if (body.Count != 5)
-                {
-                    Console.WriteLine("Not enough Cards");
-                    return (null, 400); // Return 400 for bad request
-                }
-
-                // Create a new package and get the package ID
-                int packageId = await CreatePackageInDatabaseAsync(connectionString);
-
-                if (packageId == 0)
-                {
-                    return (null, 500); // Failed to create package
-                }
-
-                // Initialize a new Package object here
-                Package package = new Package(_cardService, _userService);
-                using (var connection = new NpgsqlConnection(connectionString))
-                {
-                    await connection.OpenAsync();
-                    using (var transaction = await connection.BeginTransactionAsync())
-                    {
-                        try
-                        {
-                            // Step 1: Insert the cards and their relationship with the package
-                            foreach (var bodyElement in body)
-                            {
-                                Card card = new Card(connection)
-                                {
-                                    id = Guid.Parse(bodyElement["Id"].ToString()),
-                                    name = bodyElement["Name"].ToString(),
-                                    damage = float.Parse(bodyElement["Damage"].ToString())
-                                };
-
-                                // Insert card into database
-                                card.AddCardAsync(card, connectionString);
-
-                                // Link the card to the package
-                                await AddCardToPackageAsync(card, packageId, connectionString);
-
-                                package.cardsInPack.Add(card); // Add the card to the package's list
-                            }
-
-                            // Commit the transaction if everything is successful
-                            await transaction.CommitAsync();
-                        }
-                        catch (Exception ex)
-                        {
-                            await transaction.RollbackAsync();
-                            Console.WriteLine($"Error while creating package and adding cards: {ex.Message}");
-                            return (null, 500); // Internal server error
-                        }
-                    }
-                }
-
-                return (package, 201); // Return HTTP 201 Created
-            }
-
-            return (null, 401); // Unauthorized
-        }
-
 
         public async Task AddCardToPackageAsync(Card card, int packageId, string connectionString)
         {
