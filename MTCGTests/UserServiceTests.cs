@@ -3,6 +3,7 @@ using Npgsql;
 using SWE.Models;
 using System.Threading.Tasks;
 using Moq;
+using Microsoft.Extensions.DependencyInjection;
 
 [TestFixture]
 public class UserServiceTests
@@ -69,7 +70,6 @@ public class UserServiceTests
     [Test]
     public async Task AuthenticateUserAsync_ShouldAuthenticate_WhenCorrectCredentials()
     {
-        // Arrange
         var username = "testuser";
         var password = "correctpassword";
         var expectedToken = "testuser-mtcgToken";
@@ -103,19 +103,17 @@ public class UserServiceTests
     [Test]
     public async Task GetUserByUsernameAsync_ReturnsNull_WhenUsernameDoesNotExist()
     {
-        // Arrange
-        var mockConnection = new Mock<NpgsqlConnection>();
-        var userService = new UserService(mockConnection.Object);
+        var mockConnectionString = "Host=localhost;Username=postgres;Password=fhtw;Database=mtcg_test";
+
+        var userService = new UserService(new NpgsqlConnection(mockConnectionString));
 
         var username = "nonExistentUser";
 
-        mockConnection.Setup(conn => conn.State).Returns(System.Data.ConnectionState.Open);
-        mockConnection.Setup(conn => conn.OpenAsync()).Returns(Task.CompletedTask);
+        var mockConnection = new NpgsqlConnection(mockConnectionString);
+        mockConnection.Open();
 
-        // Act
         var result = await userService.GetUserByUsernameAsync(username);
 
-        // Assert
         Assert.Null(result);
     }
 
@@ -133,13 +131,11 @@ public class UserServiceTests
         [Test]
         public void GenerateToken_ReturnsToken_WhenValidUser()
         {
-            // Arrange
+            var _userService = new UserService(new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg_test;Port=5432"));
             var user = new User { username = "testuser" };
 
-            // Act
-            var token = _tokenService.GenerateToken(user);
+            var token = _userService.GenerateToken(user);
 
-            // Assert
             Assert.IsNotNull(token);
             Assert.IsNotEmpty(token);
         }
@@ -147,28 +143,22 @@ public class UserServiceTests
         [Test]
         public void ValidateToken_ReturnsTrue_WhenTokensAreEqual()
         {
-            // Arrange
             var token1 = "validToken123";
             var token2 = "validToken123";
 
-            // Act
             var isValid = _tokenService.ValidateToken(token1, token2);
 
-            // Assert
             Assert.IsTrue(isValid);
         }
 
         [Test]
         public void ValidateToken_ReturnsFalse_WhenTokensAreNotEqual()
         {
-            // Arrange
             var token1 = "validToken123";
             var token2 = "invalidToken456";
 
-            // Act
             var isValid = _tokenService.ValidateToken(token1, token2);
 
-            // Assert
             Assert.IsFalse(isValid);
         }
     }

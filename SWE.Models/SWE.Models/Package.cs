@@ -69,9 +69,12 @@ namespace SWE.Models
                         damage = float.Parse(bodyElement["Damage"].ToString())
                     };
 
+                    // Set card type and element based on the card's name
+                    card.SetCardTypeAndElement();
+
                     string insertCardQuery = @"
-                INSERT INTO cards (id, package_id, name, damage)
-                VALUES (@id, @packageId, @name, @damage)";
+            INSERT INTO cards (id, package_id, name, damage, type, element)
+            VALUES (@id, @packageId, @name, @damage, @type, @element)";
 
                     using (var cardCommand = new NpgsqlCommand(insertCardQuery, connection))
                     {
@@ -79,6 +82,8 @@ namespace SWE.Models
                         cardCommand.Parameters.AddWithValue("@packageId", packageId);
                         cardCommand.Parameters.AddWithValue("@name", card.name);
                         cardCommand.Parameters.AddWithValue("@damage", card.damage);
+                        cardCommand.Parameters.AddWithValue("@type", card.Type.ToString());   // Insert card type
+                        cardCommand.Parameters.AddWithValue("@element", card.Element.ToString()); // Insert card element
                         cardCommand.ExecuteNonQuery();
                     }
 
@@ -87,7 +92,7 @@ namespace SWE.Models
 
                 foreach (var card in package.cardsInPack)
                 {
-                    Console.WriteLine($"ID: {card.id}, Name: {card.name}, Damage: {card.damage}");
+                    Console.WriteLine($"ID: {card.id}, Name: {card.name}, Damage: {card.damage}, Type: {card.Type}, Element: {card.Element}");
                 }
 
                 return (package, 0); // Success
@@ -95,6 +100,7 @@ namespace SWE.Models
 
             return (null, 401); // Unauthorized
         }
+
 
 
         public async Task<List<Card>> GetPackageCardsAsync(int packageId)

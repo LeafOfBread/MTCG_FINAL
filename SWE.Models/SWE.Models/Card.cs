@@ -34,6 +34,7 @@ namespace SWE.Models
         public double damage { get; set; }
         public CardType Type { get; set; }
         public ElementType Element { get; set; }
+        public Guid package_id { get; set; }
 
         public Card(string name)
         {
@@ -113,10 +114,10 @@ namespace SWE.Models
                         try
                         {
                             // Insert package  get package_id
-                            int packageId = 0;
+                            Guid packageId = Guid.Empty;
                             using (var command = new NpgsqlCommand(insertPackageQuery, connection, transaction))
                             {
-                                packageId = (int)await command.ExecuteScalarAsync();
+                                packageId = (Guid)await command.ExecuteScalarAsync();
                             }
 
                             // Insert card with package_id, type, and element

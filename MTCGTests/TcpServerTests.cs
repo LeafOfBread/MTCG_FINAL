@@ -39,24 +39,21 @@ public class PackageTests
     [Test]
     public async Task CreatePackage_ShouldReturnUnauthorized_WhenInvalidToken()
     {
-        // Arrange
         var userService = new UserService(_connection);
         var cardService = new Card(_connection);
         var packageService = new Package(cardService, userService);
 
         var body = new List<Dictionary<string, object>>
         {
-            new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "Fire Dragon" }, { "Damage", 50.0 } },
-            new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "Water Elf" }, { "Damage", 30.0 } },
-            new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "Earth Golem" }, { "Damage", 40.0 } },
-            new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "Wind Sprite" }, { "Damage", 25.0 } },
-            new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "Fire Phoenix" }, { "Damage", 60.0 } }
+            new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "FireDragon" }, { "Damage", 50.0 } },
+            new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "WaterElf" }, { "Damage", 30.0 } },
+            new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "EarthGolem" }, { "Damage", 40.0 } },
+            new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "WindSprite" }, { "Damage", 25.0 } },
+            new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "FirePhoenix" }, { "Damage", 60.0 } }
         };
 
-        // Act
         var (package, statusCode) = packageService.createPackage("Bearer invalid-token", body, _connection);
 
-        // Assert
         Assert.AreEqual(401, statusCode);
         Assert.IsNull(package);
     }
@@ -67,27 +64,21 @@ public class PackageTests
     [Test]
     public void GetCardType_ShouldReturnCorrectCardType_WhenCardNameIsProvided()
     {
-        // Arrange
-        var cardName = "Fire Dragon";
+        var cardName = "FireDragon";
 
-        // Act
         var cardType = Card.GetCardType(cardName);
 
-        // Assert
-        Assert.AreEqual(CardType.Monster, cardType);  // Fire Dragon should be classified as a Monster
+        Assert.AreEqual(CardType.Monster, cardType);
     }
 
     [Test]
     public void GetElementalType_ShouldReturnCorrectElementType_WhenCardNameIsProvided()
     {
-        // Arrange
-        var cardName = "Water Elf";
+        var cardName = "WaterElf";
 
-        // Act
         var elementType = Card.GetElementalType(cardName);
 
-        // Assert
-        Assert.AreEqual(ElementType.Water, elementType);  // Water Elf should have a Water element
+        Assert.AreEqual(ElementType.Water, elementType);
     }
 
 }

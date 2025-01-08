@@ -25,5 +25,6 @@ namespace SWE.Models
         public int losses { get; set; }
         public string? bio { get; set; }
         public int elo { get; set; }
+        public string ingameName { get; set; }
     }
 }

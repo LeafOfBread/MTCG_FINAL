@@ -25,7 +25,7 @@ namespace SWE.Models
             {
                 await connection.OpenAsync();
 
-                var deckQuery = "SELECT * FROM decks WHERE user_id = @userId";  //hole alles aus decks wo user_id = userId
+                var deckQuery = "SELECT * FROM user_deck WHERE user_id = @userId";  //hole alles aus decks wo user_id = userId
                 var deckCommand = new NpgsqlCommand(deckQuery, connection);
                 deckCommand.Parameters.AddWithValue("@userId", user.id);
 

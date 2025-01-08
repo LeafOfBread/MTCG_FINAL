@@ -81,13 +81,17 @@ public class UserService
 
     public async Task SaveUserAsync(User user)
     {
-        const string query = "INSERT INTO users (username, password, token) VALUES (@username, @password, @token)"; //query um user zu speichern
+        const string query = "INSERT INTO users (username, password, token, ingame_name) VALUES (@username, @password, @token, @ingame_name)"; //query um user zu speichern
 
         using (var command = new NpgsqlCommand(query, _connection))
         {
             command.Parameters.AddWithValue("@username", user.username);
             command.Parameters.AddWithValue("@password", user.password);
             command.Parameters.AddWithValue("@token", user.token);
+            command.Parameters.AddWithValue("@ingame_name", user.username);
+
+            if(user.username == null || user.password == null || user.token == null)
+                throw new ArgumentNullException("User data cannot be null");
 
             if (_connection.State != System.Data.ConnectionState.Open)
             {
@@ -114,7 +118,7 @@ public class UserService
         return new AuthenticationResult { IsSuccess = true, Token = token };
     }
 
-    public async Task<User> GetUserByIdAsync(int userId)
+    public async Task<User> GetUserByIdAsync(int? userId)
     {
         string query = "SELECT id, username, password, elo, coins, wins, losses FROM users WHERE id = @userId LIMIT 1"; //query um user zu finden via id
 
@@ -214,7 +218,7 @@ public class UserService
 
     public async Task<RegistrationResult> RegisterUserAsync(User user)
     {
-        // Check ob user bereits existiert
+        // Check if user already exists
         var existingUser = await GetUserByUsernameAsync(user.username);
         if (existingUser != null)
         {
@@ -222,7 +226,14 @@ public class UserService
             return new RegistrationResult { IsSuccess = false };
         }
 
-        // Hash das passwort
+        // Check if password is null or empty
+        if (string.IsNullOrEmpty(user.password) || string.IsNullOrEmpty(user.username))
+        {
+            Console.WriteLine("400: Password cannot be null or empty\n");
+            return new RegistrationResult { IsSuccess = false };
+        }
+
+        // Hash the password
         user.password = HashPassword(user.password);
         user.token = GenerateToken(user);
 
@@ -231,6 +242,7 @@ public class UserService
 
         return new RegistrationResult { IsSuccess = true };
     }
+
     public bool VerifyPasswordHash(string enteredPassword, string storedHash)
     {
         return BCrypt.Net.BCrypt.Verify(enteredPassword, storedHash);
@@ -241,7 +253,7 @@ public class UserService
         return BCrypt.Net.BCrypt.HashPassword(password);
     }
 
-    private string GenerateToken(User user)
+    public string GenerateToken(User user)
     {
         return user.username + "-mtcgToken";
     }

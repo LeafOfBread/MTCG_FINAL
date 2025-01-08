@@ -37,7 +37,7 @@ public class DeckTests
     [Test]
     public async Task GetDeckForUser_ShouldReturnEmptyDeckForUserWithNoDeck()
     {
-        var user = new User { id = 2, username = "nouser" }; // Ensure a user with no deck exists
+        var user = new User { id = 2, username = "nouser", password = "hashedpassword" }; // Ensure a user with no deck exists
 
         await InsertUserAsync(user);
 
@@ -52,10 +52,11 @@ public class DeckTests
 
     private async Task InsertUserAsync(User user)
     {
-        using (var cmd = new NpgsqlCommand("INSERT INTO users (id, username) VALUES (@id, @username)", _connection))
+        using (var cmd = new NpgsqlCommand("INSERT INTO users (id, username, password) VALUES (@id, @username, @password)", _connection))
         {
             cmd.Parameters.AddWithValue("@id", user.id);
             cmd.Parameters.AddWithValue("@username", user.username);
+            cmd.Parameters.AddWithValue("@password", user.password);
             await cmd.ExecuteNonQueryAsync();
         }
     }

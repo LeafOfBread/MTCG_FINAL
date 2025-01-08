@@ -1,5 +1,4 @@
 ﻿using System;
-//using System.Text.Json;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
@@ -16,47 +15,20 @@ using Npgsql;
 using static System.Formats.Asn1.AsnWriter;
 using System.Net.WebSockets;
 using System.Web;
+using System.ComponentModel.Design;
 
 
 namespace SWE.Models
 {
-    //definiert route mit method, path und handler
-    public class Route
-    {
-        public string Method { get; }
-        public string Path { get; }
-        public Func<string, StreamWriter, Task> Handler { get; }
 
-        public Route(string method, string path, Func<string, StreamWriter, Task> handler)
-        {
-            Method = method;
-            Path = path;
-            Handler = handler;
-        }
-    }
-
-    //definiert router mit routes und methoden zum registrieren und handlen von routes
-    public class Router
-    {
-        private List<Route> routes = new List<Route>();
-
-        public void RegisterRoute(string method, string path, Func<string, StreamWriter, Task> handler)
-        {
-            routes.Add(new Route(method, path, handler));
-        }
-
-    }
-
-    //tcp server mit users, sessions und router
+    //tcp server mit users, sessions und routes
     public class TcpServer
     {
-                        //dependency injections
+        //dependency injections
         private readonly IServiceProvider _serviceProvider;
-        private readonly Router _router;
-        private readonly UserService _userService;
-        private readonly Package _packageService;
-        private Queue<User> battleQueue = new Queue<User>();
+        private Queue<User> battleQueue = new();
         private static readonly object battleQueueLock = new object();
+        private static string connectionString = "Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432";
 
 
         private List<Package> packs;
@@ -65,7 +37,6 @@ namespace SWE.Models
         public TcpServer(IServiceProvider serviceProvider)
         {
             _serviceProvider = serviceProvider;
-            _router = new Router();
             packs = new List<Package>();
         }
 
@@ -83,26 +54,55 @@ namespace SWE.Models
                 Task.Run(() => HandleClient(client));
             }
         }
+
+        public class HttpException : Exception
+        {
+            public int StatusCode { get; }
+
+            public HttpException(int statusCode, string message) : base(message)
+            {
+                StatusCode = statusCode;
+            }
+        }
+
+        public class BadRequestException : HttpException
+        {
+            public BadRequestException(string message = "Bad Request") : base(400, message) { }
+        }
+
+        public class UnauthorizedException : HttpException
+        {
+            public UnauthorizedException(string message = "Unauthorized") : base(401, message) { }
+        }
+
+        public class NotFoundException : HttpException
+        {
+            public NotFoundException(string message = "Not Found") : base(404, message) { }
+        }
+
         private async Task HandleClient(TcpClient client)
         {
             try
             {
                 using (NetworkStream stream = client.GetStream())
-                using (StreamReader reader = new StreamReader(stream))
                 using (StreamWriter writer = new StreamWriter(stream) { AutoFlush = true })
+                using (StreamReader reader = new StreamReader(stream))
                 {
-                    string requestLine = await reader.ReadLineAsync();
-                    string[] requestParts = requestLine.Split(' ');
+                    string? requestLine = await reader.ReadLineAsync();
+                    if (string.IsNullOrEmpty(requestLine))
+                        throw new BadRequestException();
 
-                    if (requestParts.Length < 3) return;
+                    string[] requestParts = requestLine.Split(' ');
+                    if (requestParts.Length < 3)
+                        throw new BadRequestException();
 
                     int contentLength = 0;
-                    string authHeader = null;
-                    string line;
+                    string? authHeader = null;
+                    string? line;
                     bool headersEnd = false;
-                    string requestBody = null;
+                    string requestBody = "";
 
-                    //parse request
+                    // Parse request headers
                     while (!headersEnd && !string.IsNullOrEmpty(line = await reader.ReadLineAsync()))
                     {
                         if (line.StartsWith("Content-Length:"))
@@ -119,17 +119,10 @@ namespace SWE.Models
                         }
                     }
 
-                    // content logging
-                    Console.WriteLine($"Content-Length: {contentLength}");
-                    Console.WriteLine($"Authorization: {authHeader}");
-
-                    Console.WriteLine($"Request Method: {requestParts[0]}");
-                    Console.WriteLine($"Request Path: {requestParts[1]}");
-
                     string method = requestParts[0];
                     string path = requestParts[1].Trim();
 
-                    // body handler
+                    // Read request body
                     if (contentLength > 0)
                     {
                         char[] buffer = new char[contentLength];
@@ -137,95 +130,90 @@ namespace SWE.Models
                         requestBody = new string(buffer);
                     }
 
-                    Console.WriteLine($"Request Body: {requestBody}");
-
-                    if (method == "POST")   //routing
+                    // Route requests
+                    if (method == "POST")
                     {
                         switch (path)
                         {
                             case "/sessions":
-                                await HandleLogin(requestBody, new Dictionary<string, string>(), writer);   //login
+                                await HandleLogin(requestBody, new Dictionary<string, string>(), stream);
                                 break;
 
                             case "/users":
-                                await HandleRegisterUser(requestBody, new Dictionary<string, string>(), writer);    //register
+                                await HandleRegisterUser(requestBody, new Dictionary<string, string>(), stream);
                                 break;
 
                             case "/packages":
-                                var parsedBody = JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(requestBody); 
-                                await HandlePackages(parsedBody, authHeader, stream);   //packages createn
+                                var parsedBody = JsonConvert.DeserializeObject<List<Dictionary<string, object>>>(requestBody);
+                                if (parsedBody == null || authHeader == null)
+                                    throw new BadRequestException("Invalid JSON in request body.");
+                                await HandlePackages(parsedBody, authHeader, stream);
                                 break;
 
                             case string _ when path.StartsWith("/transactions/packages"):
-                                Console.WriteLine("authHeader: " + authHeader);
-                                await HandleAcquirePackages(authHeader, stream);        //karten aus den packages and die user geben
+                                if (authHeader == null)
+                                    throw new UnauthorizedException("Missing or invalid Authorization header.");
+                                await HandleAcquirePackages(authHeader, stream);
                                 break;
 
-                            case "/battles":                                                        //funktioniert leider nicht.. :(
-                                string authToken = authHeader.Replace("Bearer ", "").Trim();
-                                Console.WriteLine("Token: " + authToken);
-                                var userService = _serviceProvider.GetRequiredService<UserService>();
-                                int? userId = await userService.GetUserIdByTokenAsync(authToken);
-                                Console.WriteLine($"Retrieved userId: {userId}");
-
-                                if (userId == null)
-                                {
-                                    await SendResponse(writer, 401, "Unauthorized");
-                                    return;
-                                }
-                                User player = new User();
-                                player = await userService.GetUserByIdAsync(userId.Value);
-                                await HandleBattle(writer, player.username);
-                                break;
-
-                            default:
-                                await SendResponse(writer, 404, "Not Found");
-                                break;
+                            default:    
+                                throw new NotFoundException();
                         }
                     }
                     else if (method == "GET")
                     {
+                        bool isPlain;
                         switch (path)
                         {
                             case "/cards":
-                                Console.WriteLine("authHeader: " + authHeader);
-                                await HandleCardListing(authHeader, writer);            //alle karten anzeigen
+                                if (string.IsNullOrEmpty(authHeader))
+                                    throw new UnauthorizedException("Missing or invalid Authorization header.");
+                                await HandleCardListing(authHeader, stream);
                                 break;
 
                             case "/deck":
-                                await HandleListPlayingDeck(authHeader, writer);        //deck anzeigen
+                                if (authHeader == null)
+                                    throw new UnauthorizedException("Missing or invalid Authorization header.");
+                                isPlain = false;
+                                await HandleListPlayingDeck(authHeader, stream, isPlain);
                                 break;
 
-                            case "/stats":
-                                string authToken = authHeader.Replace("Bearer ", "").Trim();
-                                Console.WriteLine("user token: " + authToken);
-                                await HandleGetUser(authToken.Replace("-mtcgToken", ""), authToken, writer, false); //stats anzeigen
+                            case "/deck?format=plain":
+                                if (authHeader == null)
+                                    throw new UnauthorizedException("Missing or invalid Authorization header!");
+                                isPlain = true;
+                                await HandleListPlayingDeck(authHeader, stream, isPlain);
                                 break;
 
                             case "/scoreboard":
-                                await HandleScoreBoard(writer); //scoreboar anzeigen lassen
+                                await HandleScoreBoard(stream);
                                 break;
 
-                            default:
+                            case "/stats":
+                                if (path.StartsWith("/stats"))
+                                {
+                                    if(authHeader == null)
+                                        throw new UnauthorizedException("Missing or invalid Authorization header.");
+                                    string authToken = authHeader.Replace("Bearer ", "").Trim();
+                                    string usernameFromToken = authToken.Replace("-mtcgToken", "").Trim();
+
+                                    bool justProfile = false;
+                                    bool isStatsRequest = true;
+                                    await HandleGetUser(usernameFromToken, authToken, writer, justProfile, isStatsRequest);
+                                }
+                                break;
+
+                            case string _ when path.StartsWith("/users/"):
                                 if (path.StartsWith("/users/"))
                                 {
                                     string username = path.Substring(7);
-                                    string token = authHeader.Replace("Bearer ", "").Trim(); 
-                                    string usernameFromToken = token.Replace("-mtcgToken", "").Trim();
+                                    string authToken = authHeader.Replace("Bearer ", "").Trim();
+                                    if (authHeader == null)
+                                        throw new UnauthorizedException("Missing or invalid Authorization header.");
 
-                                    if (username != usernameFromToken)
-                                    {
-                                        await SendResponse(writer, 403, "Forbidden: Token does not match the requested user");
-                                    }
-                                    else
-                                    {
-                                        await HandleGetUser(username, token, writer, true);     //user anzeigen
-                                    }
-                                }
-
-                                else
-                                {
-                                    await SendResponse(writer, 404, "Not Found");
+                                    bool justProfile = true;
+                                    bool isStatsRequest = false;
+                                    await HandleGetUser(username, authToken, writer, justProfile, isStatsRequest);
                                 }
                                 break;
                         }
@@ -235,7 +223,9 @@ namespace SWE.Models
                         switch (path)
                         {
                             case "/deck":
-                                await HandleDeckUpdate(authHeader, requestBody, writer);        //deck updaten
+                                if (authHeader == null)
+                                    throw new UnauthorizedAccessException("Missing or invalid Authorization header.");
+                                await HandleDeckUpdate(authHeader, requestBody, writer);        // deck update
                                 break;
 
                             default:
@@ -243,40 +233,51 @@ namespace SWE.Models
                                 {
                                     string username = path.Substring(7);
                                     string authToken = authHeader.Replace("Bearer ", "").Trim();
-                                    string usernameFromToken = authToken.Replace("-mtcgToken", "").Trim();
 
-                                    if (username != usernameFromToken)
+                                    if (username != authToken.Replace("-mtcgToken", "").Trim())
                                     {
-                                        await SendResponse(writer, 403, "Forbidden: Token does not match the requested user");
+                                        await SendResponse(stream, 403, "Forbidden: Token does not match the requested user");
                                     }
                                     else
                                     {
-                                        await HandleEditProfile(username, authToken, writer, requestBody);      //profil anpassen
+                                        await HandleEditProfile(username, authToken, writer, requestBody); // Profile edit
                                     }
                                 }
                                 else
                                 {
-                                    await SendResponse(writer, 404, "Not Found");
+                                    await SendResponse(stream, 404, "Not Found");
                                 }
                                 break;
                         }
                     }
                     else
-                    {
-                        await SendResponse(writer, 404, "Not Found");
-                    }
+                        throw new HttpException(405, "Method Not Allowed");
+                }
+            }
+            catch (HttpException ex)
+            {
+                Console.WriteLine($"HTTP Error: {ex.StatusCode} - {ex.Message}");
+                using (NetworkStream stream = client.GetStream())
+                {
+                    await SendResponse(stream, ex.StatusCode, ex.Message);
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error handling client: {ex.Message}");
+                Console.WriteLine($"Internal Server Error: {ex.Message}");
+                using (NetworkStream stream = client.GetStream())
+                {
+                    await SendResponse(stream, 500, "Internal Server Error");
+                }
             }
         }
 
-        private async Task HandleBattle(StreamWriter writer, string authHeader)
+
+
+        private async Task HandleBattle(Stream writer, string authHeader)
         {
             var userService = _serviceProvider.GetRequiredService<UserService>();
-            int userId;
+            int? userId;
             userId = await userService.GetUserIdByTokenAsync(authHeader);
 
             if (userId == null)
@@ -300,7 +301,7 @@ namespace SWE.Models
                 Console.WriteLine($"Player {currentPlayer.username} added to queue. Queue size: {battleQueue.Count}");
             }
 
-            User player1 = null, player2 = null;
+            User? player1 = null, player2 = null;
 
             lock (battleQueueLock)
             {
@@ -316,9 +317,8 @@ namespace SWE.Models
                 // Simulate the battle logic
                 List<string> battleLog = new List<string>();
 
-                var (log, winner) = await SimulateBattle(player1, player2, battleLog);
+                var (log, winner) = SimulateBattle(player1, player2, battleLog);
 
-                // Update player stats based on the result
                 if (winner == player1.username)
                 {
                     player1.wins++;
@@ -365,18 +365,19 @@ namespace SWE.Models
                 await SendResponse(writer, 200, "{\"message\": \"Waiting for an opponent...\"}");
             }
         }
-        private async Task<(List<string> log, string winner)> SimulateBattle(User player1, User player2, List<string> battleLog)
+
+        private (List<string>battleLog, string winner) SimulateBattle(User player1, User player2, List<string> battleLog)
         {
             string winner = "player1";
             return (battleLog, winner);
         }
 
-        public async Task HandleScoreBoard(StreamWriter writer)
+        public async Task HandleScoreBoard(Stream writer)
         {
             try
             {
                 //datenbank connection erstellen
-                var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
+                var connection = new NpgsqlConnection(connectionString);
                 await connection.OpenAsync();
 
                 string getScoreboardQuery = @"
@@ -402,7 +403,7 @@ namespace SWE.Models
                     await SendResponse(writer, 404, "No players found");
                     return;
                 }
-                    //response besser anzeigen
+                //response besser anzeigen
                 StringBuilder responseBuilder = new StringBuilder();
                 responseBuilder.AppendLine("Scoreboard:");
 
@@ -423,49 +424,55 @@ namespace SWE.Models
 
         public async Task HandleEditProfile(string username, string authToken, StreamWriter writer, string requestBody)
         {
-            // token extrahieren und trimmen
+            // Extract token and trim
             string inputToken = authToken.Replace("Bearer ", "").Trim();
             Console.WriteLine("Username: " + username);
             Console.WriteLine("Auth Token: " + inputToken);
 
             if (string.IsNullOrEmpty(inputToken))
             {
-                await SendResponse(writer, 401, "Unauthorized");
+                await SendResponse(writer.BaseStream, 401, "Unauthorized");
+                return;
+            }
+
+            string usernameFromToken = inputToken.Replace("-mtcgToken", "").Trim();
+
+            if (username != usernameFromToken)
+            {
+                await SendResponse(writer.BaseStream, 403, "Forbidden: Token does not match the requested user");
                 return;
             }
 
             var userService = _serviceProvider.GetRequiredService<UserService>();
-            int? userId = await userService.GetUserIdByTokenAsync(username + "-mtcgToken");
+            int? userId = await userService.GetUserIdByTokenAsync(inputToken);  // Use inputToken directly
 
             if (userId == null)
             {
-                await SendResponse(writer, 401, "Unauthorized");
+                await SendResponse(writer.BaseStream, 401, "Unauthorized");
                 return;
             }
             Console.WriteLine("User ID: " + userId);
 
-            // Deserialize body
-            UserProfileUpdateRequest updateRequest = JsonConvert.DeserializeObject<UserProfileUpdateRequest>(requestBody);
+            UserProfileUpdateRequest? updateRequest = JsonConvert.DeserializeObject<UserProfileUpdateRequest>(requestBody);
 
             if (updateRequest == null || string.IsNullOrEmpty(updateRequest.Name))
             {
-                await SendResponse(writer, 400, "Bad Request: Invalid input");
+                await SendResponse(writer.BaseStream, 400, "Bad Request: Invalid input");
                 return;
             }
 
-            var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
+            var connection = new NpgsqlConnection(connectionString);
             await connection.OpenAsync();
 
-            string updateUserQuery = @" //query um user zu updaten
-        UPDATE users 
-        SET username = @Name, bio = @Bio, image = @Image 
-        WHERE id = @userId";
+            string updateUserQuery = @"UPDATE users 
+                               SET username = @Name, bio = @Bio, image = @Image 
+                               WHERE id = @userId";
 
             using (var command = new NpgsqlCommand(updateUserQuery, connection))
             {
                 command.Parameters.AddWithValue("@Name", updateRequest.Name);
-                command.Parameters.AddWithValue("@Bio", updateRequest.Bio ?? (object)DBNull.Value);  // Handle nullable fields
-                command.Parameters.AddWithValue("@Image", updateRequest.Image ?? (object)DBNull.Value); // Handle nullable fields
+                command.Parameters.AddWithValue("@Bio", updateRequest.Bio ?? (object)DBNull.Value);
+                command.Parameters.AddWithValue("@Image", updateRequest.Image ?? (object)DBNull.Value);
                 command.Parameters.AddWithValue("@userId", userId.Value);
 
                 int rowsAffected = await command.ExecuteNonQueryAsync();
@@ -473,50 +480,52 @@ namespace SWE.Models
                 if (rowsAffected > 0)
                 {
                     // Successfully updated user profile
-                    await SendResponse(writer, 200, "Profile updated successfully");
+                    await SendResponse(writer.BaseStream, 200, "Profile updated successfully");
                 }
                 else
                 {
-                    // etwas ist schiefgelaufen
-                    await SendResponse(writer, 404, "User not found");
+                    await SendResponse(writer.BaseStream, 404, "User not found");
                 }
             }
         }
 
-        public async Task HandleGetUser(string username, string authToken, StreamWriter writer, bool justProfile)
+
+        public async Task HandleGetUser(string username, string authToken, StreamWriter writer, bool justProfile, bool isStatsRequest)
         {
             string inputToken = authToken.Replace("Bearer ", "").Trim();
-            Console.WriteLine("username " + username);
+            var tokenParts = inputToken.Split('-');
+            Console.WriteLine("username: " + username);
 
             if (string.IsNullOrEmpty(inputToken))
             {
-                await SendResponse(writer, 401, "Unauthorized");
+                await SendResponse(writer.BaseStream, 401, "Unauthorized");
                 return;
             }
 
-
             string usernameWithToken = username + "-mtcgToken";
-            Console.WriteLine("usernameWithToken " + usernameWithToken);
+            Console.WriteLine("usernameWithToken: " + usernameWithToken);
+
             var userService = _serviceProvider.GetRequiredService<UserService>();
             int? userId = await userService.GetUserIdByTokenAsync(usernameWithToken);
 
-            
-
             if (userId == null)
             {
-                await SendResponse(writer, 401, "Unauthorized");
+                await SendResponse(writer.BaseStream, 401, "Unauthorized");
                 return;
             }
             Console.WriteLine("User ID: " + userId);
 
-            var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
+            var connection = new NpgsqlConnection(connectionString);
             await connection.OpenAsync();
 
-            string getUserQuery = justProfile
-                ? "SELECT username, bio, image FROM users WHERE id = @userId"
-                : "SELECT username, bio, image, elo, coins, wins, losses FROM users WHERE id = @userId";
+            string getUserQuery;
 
-            User user = null;
+            if (isStatsRequest)     //abhaengig davon, ob route /stats oder /users/<username> aufgerufen wird - vermeidet redundanz einer zweiten methode, die eigentlich das gleiche machen wuerde
+                getUserQuery = "SELECT username, bio, image, ingame_name, elo, coins, wins, losses FROM users WHERE id = @userId";
+            else
+                getUserQuery = "SELECT username, bio, image, ingame_name, elo FROM users WHERE id = @userId";
+
+            User? user = null;
 
             using (var command = new NpgsqlCommand(getUserQuery, connection))
             {
@@ -529,44 +538,51 @@ namespace SWE.Models
                         {
                             username = reader.GetString(0),
                             bio = reader.IsDBNull(1) ? null : reader.GetString(1),
-                            image = reader.IsDBNull(2) ? null : reader.GetString(2)
+                            image = reader.IsDBNull(2) ? null : reader.GetString(2),
+                            ingameName = reader.GetString(3),
+                            elo = reader.GetInt32(4)
                         };
 
-                        if (!justProfile)
+                        if (isStatsRequest) // Only for stats request
                         {
-                            user.elo = reader.GetInt32(3);
-                            user.coins = reader.GetInt32(4);
-                            user.wins = reader.GetInt32(5);
-                            user.losses = reader.GetInt32(6);
+                            user.coins = reader.GetInt32(5);
+                            user.wins = reader.GetInt32(6);
+                            user.losses = reader.GetInt32(7);
                         }
                     }
                 }
             }
-
             if (user == null)
             {
-                await SendResponse(writer, 404, "User not found");
+                await SendResponse(writer.BaseStream, 404, "User not found");
                 return;
             }
+            else if (user.ingameName != tokenParts[0] && !isStatsRequest)
+            {
+                Console.WriteLine(user.username);
+                await SendResponse(writer.BaseStream, 400, "Username and Token do not match up");
+                return;
+            }
+            Console.WriteLine("username: " + user.username + " user token: " + inputToken + "-mtcgToken");
             StringBuilder responseBuilder = new StringBuilder();
 
-            if (justProfile)
-            {
-                responseBuilder.AppendLine($"Username: {user.username}");
-                responseBuilder.AppendLine($"Bio: {user.bio}");
-                responseBuilder.AppendLine($"Image: {user.image}");
-            }
-
-            else if (!justProfile)
+            if (isStatsRequest)  // Stats response
             {
                 responseBuilder.AppendLine($"ELO: {user.elo}");
                 responseBuilder.AppendLine($"Coins: {user.coins}");
                 responseBuilder.AppendLine($"Wins: {user.wins}");
                 responseBuilder.AppendLine($"Losses: {user.losses}");
             }
+            else  // Profile response
+            {
+                responseBuilder.AppendLine($"Username: {user.username}");
+                responseBuilder.AppendLine($"Bio: {user.bio}");
+                responseBuilder.AppendLine($"Image: {user.image}");
+            }
 
-            await SendResponse(writer, 200, responseBuilder.ToString());
+            await SendResponse(writer.BaseStream, 200, responseBuilder.ToString());
         }
+
 
         public async Task HandleDeckUpdate(string authToken, string body, StreamWriter writer)
         {
@@ -575,7 +591,7 @@ namespace SWE.Models
 
             if (string.IsNullOrEmpty(inputToken))
             {
-                await SendResponse(writer, 401, "Unauthorized");
+                await SendResponse(writer.BaseStream, 401, "Unauthorized");
                 return;
             }
 
@@ -584,19 +600,24 @@ namespace SWE.Models
 
             if (userId == null)
             {
-                await SendResponse(writer, 401, "Unauthorized");
+                await SendResponse(writer.BaseStream, 401, "Unauthorized");
                 return;
             }
 
-            List<Guid> cardIds = JsonConvert.DeserializeObject<List<Guid>>(body);
+            List<Guid>? cardIds = JsonConvert.DeserializeObject<List<Guid>>(body);
 
+            if (cardIds == null)
+            {
+                await SendResponse(writer.BaseStream, 400, "Invalid request body");
+                return;
+            }
             if (cardIds.Count != 4)
             {
-                await SendResponse(writer, 400, "Invalid number of cards. You must provide exactly 4 cards.");
+                await SendResponse(writer.BaseStream, 400, "Invalid number of cards. You must provide exactly 4 cards.");
                 return;
             }
 
-            var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
+            var connection = new NpgsqlConnection(connectionString);
             await connection.OpenAsync();
 
             var validCardIds = new List<Guid>();
@@ -620,7 +641,7 @@ namespace SWE.Models
             //weniger als 4 karten == error
             if (validCardIds.Count != 4)
             {
-                await SendResponse(writer, 400, "One or more cards do not belong to the user or the number of valid cards is incorrect.");
+                await SendResponse(writer.BaseStream, 400, "One or more cards do not belong to the user or the number of valid cards is incorrect.");
                 return;
             }
 
@@ -672,16 +693,10 @@ namespace SWE.Models
                 userDeck.Add(new Card(connection) { name = "InvalidCard", damage = 0 });
             }
 
-            StringBuilder responseBuilder = new StringBuilder();
-            foreach (var card in userDeck)
-            {
-                responseBuilder.AppendLine($"Name: {card.name} Damage: {card.damage} Type: {card.Type} Element: {card.Element}");
-            }
-
-            await SendResponse(writer, 200, responseBuilder.ToString());
+            await SendResponse(writer.BaseStream, 200, "User Deck successfully updated!");
         }
 
-        public async Task HandleListPlayingDeck(string authToken, StreamWriter writer)
+        public async Task HandleListPlayingDeck(string authToken, Stream writer, bool isPlain)
         {
             Console.WriteLine("authToken debug " + authToken);
             if (string.IsNullOrEmpty(authToken))
@@ -692,7 +707,7 @@ namespace SWE.Models
             string inputToken = authToken.Replace("Bearer ", "").Trim();
 
             var userService = _serviceProvider.GetRequiredService<UserService>();
-            int userId = await userService.GetUserIdByTokenAsync(inputToken);
+            int? userId = await userService.GetUserIdByTokenAsync(inputToken);
 
             if (userId == null)
             {
@@ -700,8 +715,8 @@ namespace SWE.Models
                 return;
             }
 
-            // Fetch the user's playing deck from the database
-            var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
+            // Fetch user's deck from the database
+            var connection = new NpgsqlConnection(connectionString);
             await connection.OpenAsync();
 
             const string getUserDeckQuery = @"
@@ -736,7 +751,7 @@ WHERE ud.user_id = @userId";
                 string response = JsonConvert.SerializeObject(new List<Card>());
                 await SendResponse(writer, 200, response);
             }
-            else
+            else if (!isPlain)
             {
                 StringBuilder responseBuilder = new StringBuilder();
 
@@ -752,20 +767,26 @@ WHERE ud.user_id = @userId";
                 string response = responseBuilder.ToString();
                 await SendResponse(writer, 200, response);
             }
+            else
+            {
+                var jsonResponse = JsonConvert.SerializeObject(userDeck, Formatting.Indented);
+                await SendResponse(writer, 200, jsonResponse);
+            }
         }
 
 
-        public async Task<int> HandleAcquirePackages(string authToken, NetworkStream stream)
+        public async Task<int> HandleAcquirePackages(string authToken, Stream stream)
         {
             string inputToken = authToken.Replace("Bearer ", "").Trim();
-            var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
+            var connection = new NpgsqlConnection(connectionString);
             await connection.OpenAsync();
             var userService = _serviceProvider.GetRequiredService<UserService>();
 
-            int userId = await userService.GetUserIdByTokenAsync(inputToken);
+            int? userId = await userService.GetUserIdByTokenAsync(inputToken);
             if (userId == null)
             {
-                SendResponsePackage(stream, 401, "Unauthorized");
+                await SendResponse(stream, 401, "Unauthorized");
+                Console.WriteLine("Error giving packages: User = NULL");
                 return -1;
             }
             //user coin balance
@@ -788,12 +809,12 @@ WHERE ud.user_id = @userId";
                 }
             }
 
-            // Assume each package costs 5 coins
             const int packageCost = 5;
 
             if (userCoins < packageCost)
             {
-                SendResponsePackage(stream, 400, "Not enough coins");
+                await SendResponse(stream, 400, "Not enough coins");
+                Console.WriteLine("Error giving packages: User does not have enough coins!");
                 return -1;
             }
             //bekomme das erste package mit 5 karten
@@ -804,8 +825,9 @@ JOIN cards c ON c.package_id = p.package_id
 WHERE c.user_id IS NULL
 GROUP BY p.package_id
 HAVING COUNT(c.id) = 5
-ORDER BY p.package_id
+ORDER BY p.number ASC
 LIMIT 1";
+
 
 
 
@@ -822,7 +844,8 @@ LIMIT 1";
 
             if (packageId == null)
             {
-                SendResponsePackage(stream, 404, "No packages available");
+                await SendResponse(stream, 404, "No packages available");
+                Console.WriteLine("Error giving packages: No packages available");
                 return -1;
             }
 
@@ -879,12 +902,13 @@ LIMIT 1";
 
             // Respond to the user
             string response = string.Join(", ", assignedCards.Select(card => $"{card.name} (Damage: {card.damage})"));
-            SendResponsePackage(stream, 200, $"You received: {response}");
+            await SendResponse(stream, 200, $"You received: {response}");
+            Console.WriteLine("User received: " + response);
 
             return 0;
         }
 
-        public async Task HandleCardListing(string authToken, StreamWriter writer)
+        public async Task HandleCardListing(string authToken, Stream writer)
         {
             Console.WriteLine("authToken debug " + authToken);
             if (string.IsNullOrEmpty(authToken))
@@ -892,12 +916,10 @@ LIMIT 1";
                 await SendResponse(writer, 401, "Unauthorized");
                 return;
             }
-            // Remove the "Bearer " prefix if present
             string inputToken = authToken.Replace("Bearer ", "").Trim();
 
-            // Verify user based on authToken
             var userService = _serviceProvider.GetRequiredService<UserService>();
-            int userId = await userService.GetUserIdByTokenAsync(inputToken);
+            int ?userId = await userService.GetUserIdByTokenAsync(inputToken);
 
             if (userId == null)
             {
@@ -906,7 +928,7 @@ LIMIT 1";
             }
 
             // Fetch user's cards 
-            var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
+            var connection = new NpgsqlConnection(connectionString);
             await connection.OpenAsync();
 
             const string getUserCardsQuery = @"
@@ -947,7 +969,7 @@ LIMIT 1";
 
         public async Task<int> HandlePackages(List<Dictionary<string, object>> receive, string Auth, NetworkStream stream)
         {
-            var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432");
+            var connection = new NpgsqlConnection(connectionString);
             var cardService = _serviceProvider.GetRequiredService<Card>();
             var userService = _serviceProvider.GetRequiredService<UserService>();
 
@@ -955,21 +977,27 @@ LIMIT 1";
             if (packagesINT.Item2 == 0)
             {
                 Console.WriteLine("Packages created by Admin");
-                SendResponsePackage(stream, 201, "");
+                await SendResponse(stream, 201, "");
                 return 0;
             }
-            SendResponsePackage(stream, 404, "not Authorized");
+            await SendResponse(stream, 404, "not Authorized");
             return -1;
         }
-        private async Task HandleLogin(string body, Dictionary<string, string> headers, StreamWriter writer)
+        private async Task HandleLogin(string body, Dictionary<string, string> headers, Stream writer)
         {
             using var scope = _serviceProvider.CreateScope();
             var userService = scope.ServiceProvider.GetRequiredService<UserService>();
             var request = JsonConvert.DeserializeObject<UserLoginRequest>(body);
 
-            if (request == null)
+            if (request == null || request.username == null || request.password == null)
             {
                 await SendResponse(writer, 400, "Request is NULL");
+                return;
+            }
+
+            if(string.IsNullOrEmpty(request.username) || string.IsNullOrEmpty(request.password))
+            {
+                await SendResponse(writer, 400, "Invalid username or password");
                 return;
             }
 
@@ -985,12 +1013,12 @@ LIMIT 1";
             }
         }
 
-        private async Task HandleRegisterUser(string body, Dictionary<string, string> headers, StreamWriter writer)
+        private async Task HandleRegisterUser(string body, Dictionary<string, string> headers, Stream writer)
         {
             try
             {
                 using var scope = _serviceProvider.CreateScope();
-                var userService = scope.ServiceProvider.GetRequiredService<UserService>();
+                var userService = scope.ServiceProvider.GetRequiredService<UserService>();  //dependency injection der class UserService
                 var user = JsonConvert.DeserializeObject<User>(body);
 
                 if (user == null)
@@ -1007,7 +1035,7 @@ LIMIT 1";
                 }
                 else
                 {
-                    await SendResponse(writer, 409, "User already exists");
+                    await SendResponse(writer, 401, "User already exists");
                 }
             }
             catch (Exception ex)
@@ -1017,7 +1045,7 @@ LIMIT 1";
             }
         }
 
-        private async Task SendResponsePackage(NetworkStream stream, int statusCode, string message)
+        private async Task SendResponse(Stream stream, int statusCode, string message)
         {
             string statusDescription = statusCode switch
             {
@@ -1031,24 +1059,22 @@ LIMIT 1";
 
             string response = $"HTTP/1.1 {statusCode} {statusDescription}\r\n" +
                               "Content-Type: application/json\r\n" +
+                              $"Content-Length: {Encoding.UTF8.GetByteCount(message)}\r\n" +
                               "Connection: close\r\n" +
-                              "\r\n" + 
+                              "\r\n" +
                               message;
+            try {
 
-            byte[] responseBytes = Encoding.UTF8.GetBytes(response);
-            await stream.WriteAsync(responseBytes, 0, responseBytes.Length);
+                byte[] responseBytes = Encoding.UTF8.GetBytes(response);
+                await stream.WriteAsync(responseBytes, 0, responseBytes.Length);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error sending response: {ex.Message}");
+            }
+
         }
 
-        private async Task SendResponse(StreamWriter writer, int statusCode, string message)
-        {
-            string response = $"HTTP/1.1 {statusCode} OK\r\n";
-            response += $"Content-Type: application/json\r\n";
-            response += $"Content-Length: {message.Length}\r\n"; //länge der messages
-            response += "\r\n"; // End of headers
-            response += message; // message content
-            await writer.WriteAsync(response);
-            await writer.FlushAsync();  //flush
-        }
 
     }
 

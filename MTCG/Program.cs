@@ -10,12 +10,6 @@ using System.Threading.Tasks;
 
 public class Program
 {
-    private static readonly string host = "localhost";
-    private static readonly string username = "postgres";
-    private static readonly string password = "fhtw";
-    private static readonly string database = "mtcg";
-
-    private static readonly string connectionString = $"Host={host};Username={username};Password={password};Database={database};Port=5432";
 
     public static async Task Main(string[] args)
     {
@@ -36,13 +30,12 @@ public class Program
             services.AddSingleton<NpgsqlConnection>(_ => new NpgsqlConnection(connectionString));
 
             services.AddSingleton<TcpServer>();
-            services.AddSingleton<Router>();
             services.AddSingleton<UserService>(provider =>
             {
                 var connectionString = "Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432";
                 var connection = new NpgsqlConnection(connectionString);
                 return new UserService(connection);
-            }); //ervices.AddSingleton<Database>();
+            });
             services.AddSingleton<CardService>();
             services.AddSingleton<Package>();
             services.AddTransient<Card>();

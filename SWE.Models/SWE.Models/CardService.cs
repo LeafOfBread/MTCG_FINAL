@@ -41,7 +41,7 @@ namespace SWE.Models
             return card;
         }
 
-        // Updates an existing card
+        // Updates existing card
         public void UpdateCard(Card updatedCard)
         {
             var existingCard = _cards.FirstOrDefault(c => c.id == updatedCard.id);
@@ -50,7 +50,7 @@ namespace SWE.Models
                 throw new KeyNotFoundException("Card not found.");
             }
 
-            // Update fields as needed
+            // Update fields
             existingCard.name = updatedCard.name;
             existingCard.damage = updatedCard.damage;
         }

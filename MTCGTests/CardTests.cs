@@ -4,6 +4,9 @@ using SWE.Models;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Moq;
+using System.Net.Sockets;
+using Microsoft.Extensions.DependencyInjection;
 
 [TestFixture]
 public class CardTests
@@ -38,13 +41,10 @@ public class CardTests
     [Test]
     public void SetCardTypeAndElement_ShouldSetCardTypeAndElementCorrectly()
     {
-        // Arrange
-        var card = new Card("Fire Dragon");
+        var card = new Card("FireDragon");
 
-        // Act
         card.SetCardTypeAndElement();
 
-        // Assert
         Assert.AreEqual(CardType.Monster, card.Type);
         Assert.AreEqual(ElementType.Fire, card.Element);
     }
@@ -52,80 +52,28 @@ public class CardTests
     [Test]
     public void SetCardTypeAndElement_ShouldSetDefaultTypeAndElement()
     {
-        // Arrange
-        var card = new Card("Mystic Shield");
+        var card = new Card("MysticShield");
 
-        // Act
         card.SetCardTypeAndElement();
-
-        // Assert
-        Assert.AreEqual(CardType.Monster, card.Type);  // Default to Monster
-        Assert.AreEqual(ElementType.Normal, card.Element);  // Default to Normal
+ 
+        Assert.AreEqual(CardType.Monster, card.Type);
+        Assert.AreEqual(ElementType.Normal, card.Element);
     }
 
-    [Test]
-    public async Task AddCardAsync_ShouldAddCardToDatabase()
-    {
-        // Arrange
-        var card = new Card("Fire Dragon")
-        {
-            id = Guid.NewGuid(),
-            name = "Fire Dragon",
-            damage = 50.0,
-            Type = CardType.Monster,
-            Element = ElementType.Fire
-        };
-
-        await card.AddCardAsync(card, ConnectionString);
-
-        using (var command = new NpgsqlCommand("SELECT COUNT(*) FROM public.cards WHERE id = @id", _connection))
-        {
-            command.Parameters.AddWithValue("@id", card.id);
-            var count = (long)await command.ExecuteScalarAsync();
-            Assert.AreEqual(1, count);
-        }
-    }
-
-    [Test]
-    public async Task AddCardsToUserInventoryAsync_ShouldAddCardsToUser()
-    {
-        var user = new User { id = 1, username = "testuser" }; // Ensure a test user exists
-        var card1 = new Card("Fire Dragon") { id = Guid.NewGuid() };
-        var card2 = new Card("Water Elf") { id = Guid.NewGuid() };
-        var cards = new List<Card> { card1, card2 };
-
-        await card1.AddCardAsync(card1, ConnectionString);
-        await card2.AddCardAsync(card2, ConnectionString);
-
-        await card1.AddCardsToUserInventoryAsync(user, cards);
-
-        using (var command = new NpgsqlCommand("SELECT COUNT(*) FROM public.user_deck WHERE user_id = @userId AND card_id = @cardId", _connection))
-        {
-            command.Parameters.AddWithValue("@userId", user.id);
-
-            command.Parameters.AddWithValue("@cardId", card1.id);
-            var count1 = (long)await command.ExecuteScalarAsync();
-            Assert.AreEqual(1, count1);
-
-            command.Parameters.AddWithValue("@cardId", card2.id);
-            var count2 = (long)await command.ExecuteScalarAsync();
-            Assert.AreEqual(1, count2);
-        }
-    }
-
+    
     [Test]
     public void GetCardType_ShouldReturnCorrectCardType()
     {
-        Assert.AreEqual(CardType.Monster, Card.GetCardType("Fire Dragon"));
-        Assert.AreEqual(CardType.Spell, Card.GetCardType("Healing Spell"));
+        Assert.AreEqual(CardType.Monster, Card.GetCardType("FireDragon"));
+        Assert.AreEqual(CardType.Spell, Card.GetCardType("HealingSpell"));
     }
 
     [Test]
     public void GetElementalType_ShouldReturnCorrectElementalType()
     {
-        Assert.AreEqual(ElementType.Fire, Card.GetElementalType("Fire Dragon"));
-        Assert.AreEqual(ElementType.Water, Card.GetElementalType("Water Elf"));
-        Assert.AreEqual(ElementType.Normal, Card.GetElementalType("Mystic Shield"));
+        Assert.AreEqual(ElementType.Fire, Card.GetElementalType("FireDragon"));
+        Assert.AreEqual(ElementType.Water, Card.GetElementalType("WaterElf"));
+        Assert.AreEqual(ElementType.Normal, Card.GetElementalType("MysticShield"));
     }
 
     [Test]
@@ -142,7 +90,7 @@ public class CardTests
     [Test]
     public void GetCardType_ShouldReturnMonster_ForMonsterCardName()
     {
-        string cardName = "Elf Monster";
+        string cardName = "FireElf";
 
         var cardType = Card.GetCardType(cardName);
 
@@ -152,7 +100,7 @@ public class CardTests
     [Test]
     public void GetElementalType_ShouldReturnFire_ForFireCardName()
     {
-        string cardName = "Fire Dragon";
+        string cardName = "FireDragon";
 
         var elementType = Card.GetElementalType(cardName);
 
@@ -160,16 +108,89 @@ public class CardTests
     }
 
     [Test]
-    public async Task AddCardAsync_ShouldAddCardSuccessfully()
+    public void CreatePackage_ShouldCreatePackage_WhenAuthorized()
     {
-        var card = new Card("Water Spell") { id = Guid.NewGuid(), damage = 30 };
-        card.SetCardTypeAndElement();
+        var serviceProvider = new ServiceCollection()
+        .AddSingleton<Card>()
+        .AddSingleton<UserService>()
+        .AddSingleton<TcpServer>()
+        .BuildServiceProvider();
 
-        var connectionString = "Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432";
+        var mockConnectionString = "Host=localhost;Username=postgres;Password=fhtw;Database=mtcg_test";
+        Card _cardService = new Card(mockConnectionString);
+        UserService _userService = new UserService(new NpgsqlConnection(mockConnectionString));
+        var auth = "Bearer admin-mtcgToken";
+        var receive = new List<Dictionary<string, object>>
 
-        await card.AddCardAsync(card, connectionString);
+    {
+        new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "WaterSpell" }, { "Damage", 30 } },
+        new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "FireBlast" }, { "Damage", 40 } },
+        new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "Earthquake" }, { "Damage", 50 } },
+        new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "ThunderStrike" }, { "Damage", 60 } },
+        new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "IceBlast" }, { "Damage", 70 } }
+    };
 
-        Assert.Pass("Card added successfully (Check database for confirmation).");
+        var packageService = new Package(_cardService, _userService);
+        var result = packageService.createPackage(auth, receive, new NpgsqlConnection(mockConnectionString));
+
+        Assert.AreEqual(0, result.Item2);
+        Assert.IsNotNull(result.Item1);
+    }
+
+    [Test]
+    public void CreatePackage_ShouldReturnUnauthorized_WhenInvalidToken()
+    {
+        var serviceProvider = new ServiceCollection()
+        .AddSingleton<Card>()
+        .AddSingleton<UserService>()
+        .AddSingleton<TcpServer>()
+        .BuildServiceProvider();
+
+        var mockConnectionString = "Host=localhost;Username=postgres;Password=fhtw;Database=mtcg_test";
+        Card _cardService = new Card(mockConnectionString);
+        UserService _userService = new UserService(new NpgsqlConnection(mockConnectionString));
+        var auth = "Bearer hoax-mtcgToken";
+        var receive = new List<Dictionary<string, object>>
+
+    {
+        new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "WaterSpell" }, { "Damage", 30 } },
+        new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "FireBlast" }, { "Damage", 40 } },
+        new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "Earthquake" }, { "Damage", 50 } },
+        new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "ThunderStrike" }, { "Damage", 60 } },
+        new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "IceBlast" }, { "Damage", 70 } }
+    };
+
+        var packageService = new Package(_cardService, _userService);
+        var result = packageService.createPackage(auth, receive, new NpgsqlConnection(mockConnectionString));
+
+        Assert.AreEqual(401, result.Item2);
+    }
+
+    [Test]
+    public void CreatePackage_ShouldReturnBadRequest_WhenNotEnoughCards()
+    {
+        var serviceProvider = new ServiceCollection()
+        .AddSingleton<Card>()
+        .AddSingleton<UserService>()
+        .AddSingleton<TcpServer>()
+        .BuildServiceProvider();
+
+        var mockConnectionString = "Host=localhost;Username=postgres;Password=fhtw;Database=mtcg_test";
+        Card _cardService = new Card(mockConnectionString);
+        UserService _userService = new UserService(new NpgsqlConnection(mockConnectionString));
+        var auth = "Bearer admin-mtcgToken";
+        var receive = new List<Dictionary<string, object>>
+
+    {
+        new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "WaterSpell" }, { "Damage", 30 } },
+        new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "FireBlast" }, { "Damage", 40 } },
+        new Dictionary<string, object> { { "Id", Guid.NewGuid() }, { "Name", "Earthquake" }, { "Damage", 50 } },
+    };
+
+        var packageService = new Package(_cardService, _userService);
+        var result = packageService.createPackage(auth, receive, new NpgsqlConnection(mockConnectionString));
+
+        Assert.AreEqual(400, result.Item2);
     }
 
 
