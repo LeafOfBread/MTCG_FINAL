@@ -36,9 +36,7 @@ public class Program
                 var connection = new NpgsqlConnection(connectionString);
                 return new UserService(connection);
             });
-            services.AddSingleton<CardService>();
             services.AddSingleton<Package>();
             services.AddTransient<Card>();
         });
-
 }

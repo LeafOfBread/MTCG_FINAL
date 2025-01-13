@@ -16,6 +16,7 @@ using static System.Formats.Asn1.AsnWriter;
 using System.Net.WebSockets;
 using System.Web;
 using System.ComponentModel.Design;
+using System.Reflection;
 
 
 namespace SWE.Models
@@ -150,6 +151,16 @@ namespace SWE.Models
                                 await HandlePackages(parsedBody, authHeader, stream);
                                 break;
 
+                            case "/battles":
+                                if (authHeader == null)
+                                    throw new UnauthorizedException("Missing or invalid Authorization header.");
+
+                                string authToken = authHeader.Replace("Bearer ", "").Trim();
+
+                                
+                                await HandleBattle(writer, authToken);
+                                break;
+
                             case string _ when path.StartsWith("/transactions/packages"):
                                 if (authHeader == null)
                                     throw new UnauthorizedException("Missing or invalid Authorization header.");
@@ -272,17 +283,14 @@ namespace SWE.Models
             }
         }
 
-
-
-        private async Task HandleBattle(Stream writer, string authHeader)
+        private async Task HandleBattle(StreamWriter writer, string authToken)
         {
             var userService = _serviceProvider.GetRequiredService<UserService>();
-            int? userId;
-            userId = await userService.GetUserIdByTokenAsync(authHeader);
+            int? userId = await userService.GetUserIdByTokenAsync(authToken);
 
             if (userId == null)
             {
-                await SendResponse(writer, 401, "Unauthorized");
+                await SendResponse(writer.BaseStream, 401, "Unauthorized");
                 return;
             }
 
@@ -291,20 +299,19 @@ namespace SWE.Models
             var deck = await userService.GetDeckForUser(currentPlayer);
             if (deck.Cards.Count < 4)
             {
-                await SendResponse(writer, 400, "{\"message\": \"Build a valid Deck First\"}");
+                await SendResponse(writer.BaseStream, 400, "{\"message\": \"Build a valid Deck First\"}");
                 return;
             }
 
-            lock (battleQueueLock)
-            {
-                battleQueue.Enqueue(currentPlayer);
-                Console.WriteLine($"Player {currentPlayer.username} added to queue. Queue size: {battleQueue.Count}");
-            }
+            currentPlayer.Deck = deck; // Assign deck to the player
 
             User? player1 = null, player2 = null;
 
             lock (battleQueueLock)
             {
+                battleQueue.Enqueue(currentPlayer);
+                Console.WriteLine($"Player {currentPlayer.username} added to queue. Queue size: {battleQueue.Count}");
+
                 if (battleQueue.Count >= 2)
                 {
                     battleQueue.TryDequeue(out player1);
@@ -314,69 +321,200 @@ namespace SWE.Models
 
             if (player1 != null && player2 != null)
             {
-                // Simulate the battle logic
+                // assign decks for both players
+                player1.Deck = await userService.GetDeckForUser(player1);
+                player2.Deck = await userService.GetDeckForUser(player2);
+
+                if (player1.Deck.Cards.Count < 4 || player2.Deck.Cards.Count < 4)
+                {
+                    await SendResponse(writer.BaseStream, 400, "{\"message\": \"One of the players has an invalid deck.\"}");
+                    return;
+                }
+
                 List<string> battleLog = new List<string>();
+                bool draw = SimulateBattle(player1, player2, battleLog);
 
-                var (log, winner) = SimulateBattle(player1, player2, battleLog);
+                Console.WriteLine("Battle log content:");
+                battleLog.ForEach(Console.WriteLine);
 
-                if (winner == player1.username)
+                if (!draw)
                 {
-                    player1.wins++;
-                    player2.losses++;
-                    player1.elo += 3;
-                    player2.elo = Math.Max(player2.elo - 5, 0);
+                    User winner = player1.isWinner ? player1 : player2;
+                    User loser = player1.isWinner ? player2 : player1;
+
+                    winner.wins++;
+                    winner.elo += 3;
+                    loser.losses++;
+                    loser.elo -= 5;
+
+                    // Use StringBuilder to build a readable battle log
+                    StringBuilder battleLogBuilder = new StringBuilder();
+
+                    foreach (var logEntry in battleLog)
+                    {
+                        battleLogBuilder.AppendLine(logEntry);
+                    }
+
+                    // Convert StringBuilder to string and send the formatted log
+                    string formattedBattleLog = battleLogBuilder.ToString();
+
+                    var response = new
+                    {
+                        message = "Battle completed",
+                        log = formattedBattleLog,  // Send the formatted log as a string
+                        winner = $"Winner: {winner.username}"
+                    };
+
+                    await userService.UpdateUserAsync(player1);
+                    await userService.UpdateUserAsync(player2);
+
+                    string jsonResponse = JsonConvert.SerializeObject(response);
+                    await SendResponse(writer.BaseStream, 200, jsonResponse);
                 }
-                else if (winner == player2.username)
+                else
                 {
-                    player2.wins++;
-                    player1.losses++;
-                    player2.elo += 3;
-                    player1.elo = Math.Max(player1.elo - 5, 0);
+                    await SendResponse(writer.BaseStream, 200, "Battle resulted in a draw!");
                 }
-
-                // Update players in the database
-                await userService.UpdateUserAsync(player1);
-                await userService.UpdateUserAsync(player2);
-
-                var response = new
-                {
-                    message = "Battle completed",
-                    log = log
-                };
-
-                string jsonResponse = JsonConvert.SerializeObject(response);
-                await SendResponse(writer, 200, jsonResponse);
             }
             else
             {
-                lock (battleQueueLock)
-                {
-                    if (battleQueue.Count >= 2)
-                    {
-                        battleQueue.TryDequeue(out player1);
-                        battleQueue.TryDequeue(out player2);
-                    }
-                    else
-                    {
-                        battleQueue.Enqueue(currentPlayer);
-                        return;
-                    }
-                }
-                await SendResponse(writer, 200, "{\"message\": \"Waiting for an opponent...\"}");
+                await SendResponse(writer.BaseStream, 200, "{\"message\": \"Waiting for an opponent...\"}");
             }
         }
 
-        private (List<string>battleLog, string winner) SimulateBattle(User player1, User player2, List<string> battleLog)
+
+        private bool SimulateBattle(User player1, User player2, List<string> battleLog)
         {
-            string winner = "player1";
-            return (battleLog, winner);
+            var deck1 = player1.Deck;
+            var deck2 = player2.Deck;
+
+            Random random = new Random();
+            int rounds = 0;
+            const int maxRounds = 100;
+
+            while (rounds < maxRounds && deck1.Cards.Count > 0 && deck2.Cards.Count > 0)
+            {
+                var card1 = deck1.Cards[random.Next(deck1.Cards.Count)];
+                var card2 = deck2.Cards[random.Next(deck2.Cards.Count)];
+
+                double damage1 = CalculateDamage(card1, card2, battleLog);
+                double damage2 = CalculateDamage(card2, card1, battleLog);
+
+                if (damage1 > damage2)
+                {
+                    deck1.Cards.Add(card2);
+                    deck2.Cards.Remove(card2);
+                    battleLog.Add($"Round {rounds + 1}: {player1.username}'s {card1.name} defeated {player2.username}'s {card2.name}\n");
+                }
+                else if (damage2 > damage1)
+                {
+                    deck2.Cards.Add(card1);
+                    deck1.Cards.Add(card1);
+                    battleLog.Add($"Round {rounds + 1}: {player2.username}'s {card2.name} defeated {player1.username}'s {card1.name}\n");
+                }
+                else
+                {
+                    battleLog.Add($"Round {rounds + 1}: {card1.name} and {card2.name} resulted in a draw.\n");
+                }
+
+                rounds++;
+            }
+
+            if (rounds >= maxRounds)
+            {
+                battleLog.Add("Battle ended in a draw after 100 rounds.\n");
+                return true; // draw
+            }
+
+            player1.isWinner = deck2.Count == 0;
+            player2.isWinner = deck1.Count == 0;
+            return false; // battle had a winner
+        }
+
+        private double CalculateDamage(Card attacker, Card defender, List<string> battleLog)
+        {
+            // Increase the attacker's damage based on win streak
+            double damageBoost = 1 + (attacker.winStreak * 0.2);
+            double damage = attacker.damage * damageBoost;
+            
+            if (damageBoost != 1)
+                Console.WriteLine("Card's Damageboost: " + damageBoost);
+
+            // Elemental effectiveness
+            if (attacker.Type == CardType.Spell && defender.Type == CardType.Monster)
+            {
+                if ((attacker.Element == ElementType.Water && defender.Element == ElementType.Fire) ||
+                    (attacker.Element == ElementType.Fire && defender.Element == ElementType.Normal) ||
+                    (attacker.Element == ElementType.Normal && defender.Element == ElementType.Water))
+                {
+                    damage *= 2;
+                    battleLog.Add($"{attacker.name}'s attack was effective against {defender.name}\n");
+                }
+                else if ((attacker.Element == ElementType.Fire && defender.Element == ElementType.Water) ||
+                         (attacker.Element == ElementType.Normal && defender.Element == ElementType.Fire) ||
+                         (attacker.Element == ElementType.Water && defender.Element == ElementType.Normal))
+                {
+                    damage /= 2;
+                    battleLog.Add($"{attacker.name}'s attack was not effective against {defender.name}\n");
+                }
+            }
+
+            if (attacker.name.Contains("Goblin") && defender.name == "Dragon")
+            {
+                damage = 0; // goblins fear dragons
+                battleLog.Add($"{attacker.name} was too afraid to attack {defender.name}\n");
+            }
+            else if (attacker.name.Contains("Wizzard") && defender.name.Contains("Ork"))
+            {
+                damage = 500; // wizzards control orks
+                battleLog.Add($"{attacker.name} controlled {defender.name}, preventing damage\n");
+            }
+            else if (attacker.name == "Knight" && defender.Element == ElementType.Water)
+            {
+                damage = 0; //knight drowns
+                battleLog.Add($"{attacker.name} drowned instantly from {defender.name}'s water spell\n");
+            }
+            else if (attacker.name == "Kraken" && defender.Type == CardType.Spell)
+            {
+                damage = 500; // kraken is immune to spells
+                battleLog.Add($"{attacker.name} is immune to spells like {defender.name}\n");
+            }
+            else if (attacker.name == "FireElf" && defender.name == "Dragon")
+            {
+                damage = 500; // fireelves evade dragons
+                battleLog.Add($"{attacker.name} evaded {defender.name}'s attack\n");
+            }
+
+            // critical strike check
+            Random rand = new Random();
+            double criticalChance = rand.NextDouble();
+            if (criticalChance < attacker.criticalStrikeChance)
+            {
+                damage *= 2;
+                battleLog.Add($"{attacker.name} landed a critical hit on {defender.name}, boosting damage!\n");
+            }
+
+                
+                double randomFactor = new Random().NextDouble() * 5;
+                if (damage < defender.damage)
+                {
+                    damage += randomFactor;
+                    battleLog.Add($"{attacker.name}'s attack was very close to {defender.name}'s defense, but random factor gave the edge to {attacker.name}\n");
+                }
+                else
+                {
+                    damage -= randomFactor;
+                    battleLog.Add($"{defender.name}'s defense was very close to {attacker.name}'s attack, but random factor gave the edge to {defender.name}\n");
+                }
+
+            Console.WriteLine("Player1's damage: " + damage + " Player2's damage: " + defender.damage);
+            return damage;
         }
 
         public async Task HandleScoreBoard(Stream writer)
         {
             try
             {
-                //datenbank connection erstellen
                 var connection = new NpgsqlConnection(connectionString);
                 await connection.OpenAsync();
 

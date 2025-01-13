@@ -15,6 +15,13 @@ namespace SWE.Models
 
         public string Name { get; set; }
         public List<Card> Cards { get; set; }
+        public int Count { get; set; }
+
+        public Deck()
+        {
+            Cards = new List<Card>();
+            Count = Count;
+        }
 
 
         public async Task<Deck> GetDeckForUser(User user)   //hole das Deck fuer den User

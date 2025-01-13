@@ -26,5 +26,7 @@ namespace SWE.Models
         public string? bio { get; set; }
         public int elo { get; set; }
         public string ingameName { get; set; }
+        public bool isWinner { get; set; }
+        public Deck Deck { get; set; }
     }
 }

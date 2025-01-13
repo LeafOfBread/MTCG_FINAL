@@ -51,32 +51,26 @@ public class UserService
 
     public async Task<int> GetUserIdByTokenAsync(string token)
     {
-        if (string.IsNullOrEmpty(token))
-            throw new ArgumentException("Token must not be null or empty.", nameof(token));
-
-        const string query = "SELECT * FROM users WHERE token = @token";    //query um user zu finden via token
-
-        int returningId;
-
-        using (var command = new NpgsqlCommand(query, _connection))
+        using (var connection = new NpgsqlConnection(connectionString))
         {
-            command.Parameters.AddWithValue("@token", token);
+            await connection.OpenAsync();
+            const string query = "SELECT id FROM users WHERE token = @token";
 
-            if (_connection.State != System.Data.ConnectionState.Open)
+            using (var command = new NpgsqlCommand(query, connection))
             {
-                await _connection.OpenAsync();
-            }
+                command.Parameters.AddWithValue("@token", token);
 
-            using (var reader = await command.ExecuteReaderAsync())
-            {
-                if (await reader.ReadAsync())
+                using (var reader = await command.ExecuteReaderAsync())
                 {
-                    returningId = reader.GetInt32(reader.GetOrdinal("id"));
-                    return returningId;
+                    if (await reader.ReadAsync())
+                    {
+                        return reader.GetInt32(reader.GetOrdinal("id"));
+                    }
                 }
             }
         }
-        return -1; //return value fuer error handling
+
+        return -1;
     }
 
     public async Task SaveUserAsync(User user)
@@ -168,8 +162,8 @@ public class UserService
                 await connection.OpenAsync();
             }
 
-            var query = "SELECT c.id, c.name FROM cards c " +           //query um deck zu finden via user
-                        "INNER JOIN user_decks ud ON ud.card_id = c.id " +
+            var query = "SELECT c.id, c.name, c.damage, c.criticalstrikechance FROM cards c " +           //query um deck zu finden via user
+                        "INNER JOIN user_deck ud ON ud.card_id = c.id " +
                         "WHERE ud.user_id = @userId";
 
             using (var command = new NpgsqlCommand(query, connection))
@@ -183,7 +177,9 @@ public class UserService
                         var card = new Card(connection)
                         {
                             id = reader.GetGuid(reader.GetOrdinal("id")),
-                            name = reader.GetString(reader.GetOrdinal("name"))
+                            name = reader.GetString(reader.GetOrdinal("name")),
+                            damage = reader.GetDouble(reader.GetOrdinal("damage")),
+                            criticalStrikeChance = reader.GetDouble(reader.GetOrdinal("criticalstrikechance"))
                         };
 
                         deck.Cards.Add(card);
@@ -201,7 +197,7 @@ public class UserService
         {
             await connection.OpenAsync();
 
-            var query = "UPDATE users SET wins = @wins, losses = @losses, draws = @draws, elo = @elo " +
+            var query = "UPDATE users SET wins = @wins, losses = @losses, elo = @elo " +
                         "WHERE id = @userId";
 
             using (var command = new NpgsqlCommand(query, connection))

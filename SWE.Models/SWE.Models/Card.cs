@@ -35,6 +35,8 @@ namespace SWE.Models
         public CardType Type { get; set; }
         public ElementType Element { get; set; }
         public Guid package_id { get; set; }
+        public double criticalStrikeChance { get; set; }
+        public int winStreak { get; set; }
 
         public Card(string name)
         {
@@ -94,79 +96,6 @@ namespace SWE.Models
             else
             {
                 Element = ElementType.Normal;
-            }
-        }
-
-
-        //add card to the database
-        public async Task AddCardAsync(Card card, string connectionString)
-        {
-            const string insertPackageQuery = "INSERT INTO public.packages DEFAULT VALUES RETURNING package_id";
-            const string insertCardQuery = "INSERT INTO public.cards (id, name, damage, package_id, type, element) VALUES (@id, @name, @damage, @packageId, @type, @element)";
-
-            try
-            {
-                using (var connection = new NpgsqlConnection(connectionString))
-                {
-                    await connection.OpenAsync();
-                    using (var transaction = await connection.BeginTransactionAsync())
-                    {
-                        try
-                        {
-                            // Insert package  get package_id
-                            Guid packageId = Guid.Empty;
-                            using (var command = new NpgsqlCommand(insertPackageQuery, connection, transaction))
-                            {
-                                packageId = (Guid)await command.ExecuteScalarAsync();
-                            }
-
-                            // Insert card with package_id, type, and element
-                            using (var command = new NpgsqlCommand(insertCardQuery, connection, transaction))
-                            {
-                                command.Parameters.AddWithValue("@id", card.id);
-                                command.Parameters.AddWithValue("@name", card.name);
-                                command.Parameters.AddWithValue("@damage", card.damage);
-                                command.Parameters.AddWithValue("@packageId", packageId);
-                                command.Parameters.AddWithValue("@type", card.Type.ToString());
-                                command.Parameters.AddWithValue("@element", card.Element.ToString());
-                                await command.ExecuteNonQueryAsync();
-                            }
-
-                            await transaction.CommitAsync();
-                        }
-                        catch (Exception ex)
-                        {
-                            await transaction.RollbackAsync();
-                            Console.WriteLine($"Error inserting card and package: {ex.Message}");
-                            throw;
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error inserting card: {ex.Message}");
-                throw;
-            }
-        }
-
-        //add cards to user inventory
-        public async Task AddCardsToUserInventoryAsync(User user, List<Card> cards)
-        {
-            const string query = "INSERT INTO user_cards (user_id, card_id) VALUES (@userId, @cardId)";
-            using (var connection = new NpgsqlConnection("Host=localhost;Username=postgres;Password=fhtw;Database=mtcg;Port=5432"))
-            {
-                await connection.OpenAsync();
-                using (var command = new NpgsqlCommand(query, connection))
-                {
-                    foreach (var card in cards)
-                    {
-                        command.Parameters.Clear();
-                        command.Parameters.AddWithValue("@userId", user.id);
-                        command.Parameters.AddWithValue("@cardId", card.id);
-                        await command.ExecuteNonQueryAsync();
-                    }
-                }
             }
         }
     }

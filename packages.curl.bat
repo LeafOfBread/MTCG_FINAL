@@ -16,69 +16,7 @@ for %%a in (%*) do (
     )
 )
 
-REM --------------------------------------------------
-echo 14) edit user data
-echo.
-curl -i -X GET http://localhost:10001/users/kienboec --header "Authorization: Bearer kienboec-mtcgToken"
-echo "Should return HTTP 200 - and current user data"
-echo.
-curl -i -X GET http://localhost:10001/users/altenhof --header "Authorization: Bearer altenhof-mtcgToken"
-echo "Should return HTTP 200 - and current user data"
-echo.
-curl -i -X PUT http://localhost:10001/users/kienboec --header "Content-Type: application/json" --header "Authorization: Bearer kienboec-mtcgToken" -d "{\"Name\": \"Kienboeck\",  \"Bio\": \"me playin...\", \"Image\": \":-)\"}"
-echo "Should return HTTP 2xx"
-echo.
-curl -i -X PUT http://localhost:10001/users/altenhof --header "Content-Type: application/json" --header "Authorization: Bearer altenhof-mtcgToken" -d "{\"Name\": \"Altenhofer\", \"Bio\": \"me codin...\",  \"Image\": \":-D\"}"
-echo "Should return HTTP 2xx"
-echo.
-curl -i -X GET http://localhost:10001/users/kienboec --header "Authorization: Bearer kienboec-mtcgToken"
-echo "Should return HTTP 200 - and new user data"
-echo.
-curl -i -X GET http://localhost:10001/users/altenhof --header "Authorization: Bearer altenhof-mtcgToken"
-echo "Should return HTTP 200 - and new user data"
-echo.
-echo.
 
-if %pauseFlag%==1 pause
-
-echo should fail:
-curl -i -X GET http://localhost:10001/users/altenhof --header "Authorization: Bearer kienboec-mtcgToken"
-echo "Should return HTTP 4xx"
-echo.
-curl -i -X GET http://localhost:10001/users/kienboec --header "Authorization: Bearer altenhof-mtcgToken"
-echo "Should return HTTP 4xx"
-echo.
-curl -i -X PUT http://localhost:10001/users/kienboec --header "Content-Type: application/json" --header "Authorization: Bearer altenhof-mtcgToken" -d "{\"Name\": \"Hoax\",  \"Bio\": \"me playin...\", \"Image\": \":-)\"}"
-echo "Should return HTTP 4xx"
-echo.
-curl -i -X PUT http://localhost:10001/users/altenhof --header "Content-Type: application/json" --header "Authorization: Bearer kienboec-mtcgToken" -d "{\"Name\": \"Hoax\", \"Bio\": \"me codin...\",  \"Image\": \":-D\"}"
-echo "Should return HTTP 4xx"
-echo.
-curl -i -X GET http://localhost:10001/users/someGuy  --header "Authorization: Bearer kienboec-mtcgToken"
-echo "Should return HTTP 4xx"
-echo.
-echo.
-
-if %pauseFlag%==1 pause
-
-REM --------------------------------------------------
-echo 15) stats
-curl -i -X GET http://localhost:10001/stats --header "Authorization: Bearer kienboec-mtcgToken"
-echo "Should return HTTP 200 - and user stats"
-echo.
-curl -i -X GET http://localhost:10001/stats --header "Authorization: Bearer altenhof-mtcgToken"
-echo "Should return HTTP 200 - and user stats"
-echo.
-echo.
-
-if %pauseFlag%==1 pause
-
-REM --------------------------------------------------
-echo 16) scoreboard
-curl -i -X GET http://localhost:10001/scoreboard --header "Authorization: Bearer kienboec-mtcgToken"
-echo "Should return HTTP 200 - and the scoreboard"
-echo.
-echo.
 
 if %pauseFlag%==1 pause
 
